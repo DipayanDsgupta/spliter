@@ -46,13 +46,22 @@ export function AppProvider({ children }) {
                 supabase.from('expenses').select('*, expense_splits(*)').in('group_id', groupIds).order('created_at', { ascending: false }),
             ])
 
-            // Populate members per group
+            // Populate members per group & extract unique user IDs
+            const uniqueUserIds = new Set()
             if (membersRes.data) {
                 loadedGroups.forEach(g => {
-                    g.members = membersRes.data.filter(m => m.group_id === g.id).map(m => m.user_id)
+                    const groupMembers = membersRes.data.filter(m => m.group_id === g.id).map(m => m.user_id)
+                    g.members = groupMembers
+                    groupMembers.forEach(uid => { if (uid !== userId) uniqueUserIds.add(uid) })
                 })
             }
             setGroups(loadedGroups)
+
+            // Step 3: Fetch all friends' profiles explicitly so we bypass any Supabase FK cache errors
+            if (uniqueUserIds.size > 0) {
+                const { data: friendsData } = await supabase.from('users').select('*').in('id', Array.from(uniqueUserIds))
+                if (friendsData) setFriends(friendsData)
+            }
 
             // Map expenses
             if (expensesRes.data?.length) {
