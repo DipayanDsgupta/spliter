@@ -71,8 +71,8 @@ export default function AddExpensePage() {
         return (parseFloat(amount) / participants.length).toFixed(2)
     }
 
-    const totalPercent = Object.values(percentAmounts).reduce((s, v) => s + (parseFloat(v) || 0), 0)
-    const totalUnequal = Object.values(unequalAmounts).reduce((s, v) => s + (parseFloat(v) || 0), 0)
+    const totalPercent = participants.reduce((s, uid) => s + (parseFloat(percentAmounts[uid]) || 0), 0)
+    const totalUnequal = participants.reduce((s, uid) => s + (parseFloat(unequalAmounts[uid]) || 0), 0)
     const totalPaidSplit = Object.values(payerAmounts).reduce((s, v) => s + (parseFloat(v) || 0), 0)
 
     const buildSplits = () => {
@@ -110,6 +110,7 @@ export default function AddExpensePage() {
 
     const canSubmit = () => {
         if (!canProceed) return false
+        if (participants.length === 0) return false
         if (payers.length > 1 && Math.abs(totalPaidSplit - parseFloat(amount)) > 0.1) return false
         if (splitMethod === 'unequal' && Math.abs(totalUnequal - parseFloat(amount)) > 0.1) return false
         if (splitMethod === 'percent' && Math.abs(totalPercent - 100) > 0.5) return false
@@ -335,6 +336,39 @@ export default function AddExpensePage() {
                                 )}
                             </div>
 
+                            {/* Split among */}
+                            <div>
+                                <div className="flex items-center justify-between mb-3">
+                                    <p className="text-[#94A3B8] text-xs font-semibold uppercase tracking-wider">Split among</p>
+                                    <button
+                                        className="text-xs text-[#7C3AED] font-bold"
+                                        onClick={() => setParticipants(participants.length === groupMembers.length ? [] : groupMembers.map(m => m.id))}
+                                    >
+                                        {participants.length === groupMembers.length ? 'Deselect All' : 'Select All'}
+                                    </button>
+                                </div>
+                                <div className="flex flex-wrap gap-2 mb-6">
+                                    {groupMembers.map(person => {
+                                        const isSelected = participants.includes(person.id)
+                                        return (
+                                            <button
+                                                key={`part-${person.id}`}
+                                                onClick={() => toggleParticipant(person.id)}
+                                                className="px-3 py-1.5 rounded-full text-[11px] font-bold transition-all flex items-center gap-1.5"
+                                                style={{
+                                                    background: isSelected ? 'rgba(124,58,237,0.15)' : 'rgba(255,255,255,0.03)',
+                                                    color: isSelected ? '#fff' : '#94A3B8',
+                                                    border: `1px solid ${isSelected ? 'rgba(124,58,237,0.4)' : 'rgba(255,255,255,0.05)'}`
+                                                }}
+                                            >
+                                                {person.id === currentUser.id ? 'You' : person.full_name.split(' ')[0]}
+                                                {isSelected && <span className="text-[#7C3AED]">✓</span>}
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+
                             {/* Split method */}
                             <div>
                                 <p className="text-[#94A3B8] text-xs font-semibold uppercase tracking-wider mb-3">Split method</p>
@@ -362,7 +396,7 @@ export default function AddExpensePage() {
                                 {/* Participants list for unequal/percent */}
                                 {(splitMethod === 'unequal' || splitMethod === 'percent') && (
                                     <div className="space-y-2">
-                                        {groupMembers.map(person => {
+                                        {groupMembers.filter(m => participants.includes(m.id)).map(person => {
                                             const [c1, c2] = getAvatarColor(person.full_name)
                                             return (
                                                 <div key={person.id} className="flex items-center gap-3">
