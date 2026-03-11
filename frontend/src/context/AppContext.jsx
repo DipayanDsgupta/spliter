@@ -176,10 +176,30 @@ export function AppProvider({ children }) {
         // Reset guard on mount so re-renders work correctly
         sessionHandled.current = false
 
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            if (session?.user) handleUserSession(session.user)
-            else setIsLoading(false)
-        })
+        // 10-second safety fallback: Never get stuck continuously loading
+        const safetyTimer = setTimeout(() => {
+            setIsLoading(false)
+        }, 10000)
+
+        const initAuth = async () => {
+            try {
+                const { data: { session }, error } = await supabase.auth.getSession()
+                if (error) {
+                    console.warn('getSession error:', error)
+                    setIsLoading(false)
+                    return
+                }
+                if (session?.user) {
+                    await handleUserSession(session.user)
+                } else {
+                    setIsLoading(false)
+                }
+            } catch (err) {
+                console.error('getSession exception:', err)
+                setIsLoading(false)
+            }
+        }
+        initAuth()
 
         const { data: { subscription } } = onAuthChange(async (event, session) => {
             if (event === 'SIGNED_IN' && session?.user) {
@@ -193,7 +213,10 @@ export function AppProvider({ children }) {
             }
         })
 
-        return () => subscription.unsubscribe()
+        return () => {
+            clearTimeout(safetyTimer)
+            subscription.unsubscribe()
+        }
     }, [handleUserSession])
 
     /* ── Realtime Data Syncing ── */
