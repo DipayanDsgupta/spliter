@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, onAuthChange, fetchUserProfile, upsertUserProfile, signOut, claimPendingInvites } from '../services/supabase'
 import { MOCK_FRIENDS, MOCK_GROUPS, MOCK_EXPENSES, MOCK_SETTLEMENTS } from '../utils/mockData'
+import toast from 'react-hot-toast'
 
 const AppContext = createContext(null)
 
@@ -17,6 +18,7 @@ export function AppProvider({ children }) {
     const [groups, setGroups] = useState(SUPABASE_CONFIGURED ? [] : MOCK_GROUPS)
     const [expenses, setExpenses] = useState(SUPABASE_CONFIGURED ? [] : MOCK_EXPENSES)
     const [settlements, setSettlements] = useState(SUPABASE_CONFIGURED ? [] : MOCK_SETTLEMENTS)
+    const prevGroupsRef = useRef([])
 
     /* ── Load groups + expenses in PARALLEL (fast!) ── */
     const loadUserData = useCallback(async (userId) => {
@@ -28,7 +30,16 @@ export function AppProvider({ children }) {
                 .select('group_id, groups(id, name, emoji, created_at, created_by)')
                 .eq('user_id', userId)
 
-            if (!memberRows?.length) return
+            if (!memberRows?.length) {
+                const prev = prevGroupsRef.current
+                if (prev.length > 0) {
+                    prev.forEach(g => toast.error(`You were removed from group "${g.name}" 🚫`, { duration: 5000 }))
+                    prevGroupsRef.current = []
+                    setGroups([])
+                    setExpenses([])
+                }
+                return
+            }
 
             const groupIds = memberRows.map(r => r.group_id)
             const loadedGroups = memberRows.map(r => ({ ...r.groups, members: [] }))
@@ -48,6 +59,29 @@ export function AppProvider({ children }) {
                     groupMembers.forEach(uid => { if (uid !== userId) uniqueUserIds.add(uid) })
                 })
             }
+
+            // --- Real-time difference detection for Notifications ---
+            const prev = prevGroupsRef.current
+            if (prev.length > 0) {
+                const currentIds = loadedGroups.map(g => g.id)
+                // 1. Did we lose any groups?
+                const lostGroups = prev.filter(g => !currentIds.includes(g.id))
+                lostGroups.forEach(g => {
+                    toast.error(`You were removed from group "${g.name}" or it was deleted 🚫`, { duration: 5000 })
+                })
+
+                // 2. Did any existing groups lose members?
+                loadedGroups.forEach(currGroup => {
+                    const oldGroup = prev.find(g => g.id === currGroup.id)
+                    if (oldGroup) {
+                        const lostMembers = oldGroup.members.filter(m => !currGroup.members.includes(m))
+                        if (lostMembers.length > 0) {
+                            toast(`A member was removed from "${currGroup.name}" ℹ️`, { icon: '🚪' })
+                        }
+                    }
+                })
+            }
+            prevGroupsRef.current = loadedGroups
             setGroups(loadedGroups)
 
             // Step 3: Fetch all friends' profiles explicitly so we bypass any Supabase FK cache errors

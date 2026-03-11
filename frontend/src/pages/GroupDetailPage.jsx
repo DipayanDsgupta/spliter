@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp, Copy, Trash2 } from 'lucide-react'
@@ -160,11 +160,13 @@ export default function GroupDetailPage() {
     const [showSimplified, setShowSimplified] = useState(false)
     const [activeTab, setActiveTab] = useState('expenses') // 'expenses' | 'balances'
 
-    if (!group) return (
-        <div className="flex items-center justify-center min-h-dvh">
-            <p className="text-[#94A3B8]">Group not found</p>
-        </div>
-    )
+    useEffect(() => {
+        if (!group) {
+            navigate('/', { replace: true })
+        }
+    }, [group, navigate])
+
+    if (!group) return null // returning null avoids flashy flashes while it redirects
 
     const balances = calculateNetBalances(expenses)
     const transactions = simplifyDebts(balances)
