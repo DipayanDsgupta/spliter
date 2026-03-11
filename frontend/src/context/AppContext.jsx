@@ -138,6 +138,22 @@ export function AppProvider({ children }) {
         return () => subscription.unsubscribe()
     }, [handleUserSession])
 
+    /* ── Realtime Data Syncing ── */
+    useEffect(() => {
+        if (!SUPABASE_CONFIGURED || !currentUser) return
+
+        const channel = supabase.channel('public:spliter_activity')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, () => {
+                loadUserData(currentUser.id)
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => {
+                loadUserData(currentUser.id)
+            })
+            .subscribe()
+
+        return () => { supabase.removeChannel(channel) }
+    }, [currentUser, loadUserData])
+
     /* ── completeProfile — returns redirectTo if user came via invite link ── */
     const completeProfile = async ({ full_name, phone, upi_id }) => {
         if (!SUPABASE_CONFIGURED) {
@@ -241,6 +257,31 @@ export function AppProvider({ children }) {
         return g
     }
 
+    const joinGroup = async (groupId) => {
+        if (!SUPABASE_CONFIGURED || !currentUser) throw new Error('Not configured')
+
+        // 1. Verify group exists
+        const { data: group } = await supabase.from('groups').select('*').eq('id', groupId).single()
+        if (!group) throw new Error('Group not found')
+
+        // 2. Join it
+        const { error } = await supabase.from('group_members').upsert({ group_id: groupId, user_id: currentUser.id }, { onConflict: 'group_id,user_id', ignoreDuplicates: true })
+        if (error) throw error
+
+        // 3. Data will reload via Realtime, but let's fast-track it:
+        await loadUserData(currentUser.id)
+        return group
+    }
+
+    const removeMember = async (groupId, userId) => {
+        if (!SUPABASE_CONFIGURED) return
+        try {
+            await supabase.from('group_members').delete().match({ group_id: groupId, user_id: userId })
+            // Data reloads via Realtime, but here's a local optimistic update
+            setGroups(prev => prev.map(g => g.id === groupId ? { ...g, members: g.members.filter(m => m !== userId) } : g))
+        } catch (e) { console.error('removeMember error:', e) }
+    }
+
     const getUserById = id => id === currentUser?.id ? currentUser : friends.find(f => f.id === id) || null
     const getGroupById = id => groups.find(g => g.id === id) || null
     const getExpensesByGroup = gid => expenses.filter(e => e.group_id === gid)
@@ -251,7 +292,7 @@ export function AppProvider({ children }) {
         login, logout, completeProfile, needsProfile,
         isLoading, isSupabaseConfigured: SUPABASE_CONFIGURED,
         friends, setFriends,
-        groups, addGroup,
+        groups, addGroup, joinGroup, removeMember,
         expenses, addExpense,
         settlements, markSettled,
         getUserById, getGroupById, getExpensesByGroup,

@@ -1,32 +1,56 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp, Copy, Trash2 } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { useApp } from '../context/AppContext'
 import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, CATEGORIES, generateGooglePayLink } from '../utils/helpers'
 
-function MemberBalance({ userId, net }) {
-    const { getUserById, currentUser } = useApp()
+function MemberBalance({ userId, net, group }) {
+    const { getUserById, currentUser, removeMember } = useApp()
     const user = getUserById(userId)
     const isMe = userId === currentUser?.id
+    const isAdmin = userId === group?.created_by
+    const iAmAdmin = currentUser?.id === group?.created_by
     const [c1, c2] = getAvatarColor(user?.full_name || '')
+
+    const handleRemove = async () => {
+        if (!window.confirm(`Remove ${user?.full_name} from the group?`)) return;
+        await removeMember(group.id, userId);
+        toast.success('Member removed');
+    }
 
     return (
         <div className="flex items-center gap-3 py-2.5">
-            <div className="avatar text-white text-xs" style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
+            <div className="avatar text-white text-xs shrink-0" style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
                 {getInitials(user?.full_name)}
             </div>
-            <div className="flex-1">
-                <p className="text-white text-sm font-semibold">
+            <div className="flex-1 min-w-0 flex items-center gap-2">
+                <p className="text-white text-sm font-semibold truncate">
                     {isMe ? 'You' : user?.full_name?.split(' ')[0]}
                 </p>
+                {isAdmin && (
+                    <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                        style={{ background: 'rgba(59,130,246,0.15)', color: '#60A5FA', border: '1px solid rgba(59,130,246,0.3)' }}>
+                        Admin
+                    </span>
+                )}
             </div>
-            {Math.abs(net) < 1 ? (
-                <span className="text-xs font-semibold text-[#10B981] bg-green-500/10 px-2 py-1 rounded-full">✓ Settled</span>
-            ) : net > 0 ? (
-                <span className="text-sm font-bold amount-positive">+{formatAmount(net)}</span>
-            ) : (
-                <span className="text-sm font-bold amount-negative">-{formatAmount(-net)}</span>
+
+            <div className="text-right shrink-0">
+                {Math.abs(net) < 1 ? (
+                    <span className="text-xs font-semibold text-[#10B981] bg-green-500/10 px-2 py-1 rounded-full">✓ Settled</span>
+                ) : net > 0 ? (
+                    <span className="text-sm font-bold amount-positive">+{formatAmount(net)}</span>
+                ) : (
+                    <span className="text-sm font-bold amount-negative">-{formatAmount(-net)}</span>
+                )}
+            </div>
+
+            {iAmAdmin && !isMe && Math.abs(net) < 1 && (
+                <button onClick={handleRemove} className="p-1.5 rounded-lg ml-1 hover:bg-white/5" title="Remove Member">
+                    <Trash2 size={14} className="text-red-400" />
+                </button>
             )}
         </div>
     )
@@ -158,12 +182,18 @@ export default function GroupDetailPage() {
                     >
                         <ArrowLeft size={18} className="text-white" />
                     </motion.button>
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                             <span className="text-2xl">{group.emoji}</span>
-                            <h1 className="text-xl font-extrabold text-white">{group.name}</h1>
+                            <h1 className="text-xl font-extrabold text-white truncate">{group.name}</h1>
                         </div>
-                        <p className="text-xs text-[#94A3B8] mt-0.5">{group.members.length} members</p>
+                        <p className="text-xs text-[#94A3B8] mt-0.5">
+                            {group.members.length} members · ID: <span className="font-mono text-white select-all">{group.id.slice(0, 15)}...</span>
+                        </p>
+                        <button onClick={() => { navigator.clipboard.writeText(group.id); toast.success('Group ID copied! Share this with your friends to join.'); }}
+                            className="text-[10px] uppercase font-bold text-purple-400 flex items-center gap-1 mt-1 hover:text-purple-300">
+                            <Copy size={10} /> Copy ID to invite
+                        </button>
                     </div>
                     <motion.button
                         className="w-10 h-10 rounded-2xl flex items-center justify-center"
@@ -320,7 +350,7 @@ export default function GroupDetailPage() {
                         <p className="text-xs text-[#94A3B8] font-semibold uppercase tracking-wider mb-4">Net Balance per Member</p>
                         <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
                             {group.members.map(mid => (
-                                <MemberBalance key={mid} userId={mid} net={balances[mid] || 0} />
+                                <MemberBalance key={mid} userId={mid} net={balances[mid] || 0} group={group} />
                             ))}
                         </div>
                     </div>

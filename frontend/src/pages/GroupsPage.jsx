@@ -11,9 +11,6 @@ const EMOJIS = ['🏖️', '🏠', '🎉', '✈️', '🍕', '💼', '🎮', '�
 const isEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
 const isPhone = v => /^[6-9]\d{9}$/.test(v.replace(/\D/g, ''))
 
-/* ── helpers ── */
-const getInviteLink = (group) => `${window.location.origin}/join/${group.id}`
-
 /* ══════════════════════════════════════════
    CREATE GROUP MODAL
 ══════════════════════════════════════════ */
@@ -81,24 +78,21 @@ function CreateGroupModal({ onClose }) {
     const goToGroup = () => { onClose(); navigate(`/groups/${createdGroup.id}`) }
 
     const shareWhatsApp = () => {
-        const link = getInviteLink(createdGroup)
-        const msg = encodeURIComponent(`Hey! I added you to *${createdGroup.name}* on Spliter — split expenses easily! 💰\n\nJoin here 👉 ${link}`)
+        const msg = encodeURIComponent(`Hey! I added you to *${createdGroup.name}* on Spliter — split expenses easily! 💰\n\nJoin my group using this ID: ${createdGroup.id}`)
         window.open(`https://wa.me/?text=${msg}`, '_blank')
     }
     const shareSMS = () => {
-        const link = getInviteLink(createdGroup)
-        const msg = encodeURIComponent(`Join "${createdGroup.name}" on Spliter 👉 ${link}`)
+        const msg = encodeURIComponent(`Join "${createdGroup.name}" on Spliter 👉 ID: ${createdGroup.id}`)
         window.open(`sms:?body=${msg}`, '_blank')
     }
-    const copyLink = async () => {
-        await navigator.clipboard.writeText(getInviteLink(createdGroup))
-        toast.success('Invite link copied! 📋')
+    const copyId = async () => {
+        await navigator.clipboard.writeText(createdGroup.id)
+        toast.success('Group ID copied! 📋')
     }
     const nativeShare = async () => {
-        const link = getInviteLink(createdGroup)
         if (navigator.share) {
-            await navigator.share({ title: `Join ${createdGroup.name} on Spliter`, text: `Split expenses with me! 💰`, url: link })
-        } else { await copyLink() }
+            await navigator.share({ title: `Join ${createdGroup.name}`, text: `Split expenses on Spliter! Use Group ID: ${createdGroup.id}` })
+        } else { await copyId() }
     }
 
     return (
@@ -132,11 +126,11 @@ function CreateGroupModal({ onClose }) {
                             <div className="flex items-center gap-2 p-3 rounded-2xl mb-5"
                                 style={{ background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)' }}>
                                 <p className="text-xs flex-1 truncate font-mono" style={{ color: '#9D5FF3' }}>
-                                    {getInviteLink(createdGroup)}
+                                    {createdGroup.id}
                                 </p>
-                                <button onClick={copyLink} className="px-3 py-1.5 rounded-xl text-xs font-bold shrink-0"
+                                <button onClick={copyId} className="px-3 py-1.5 rounded-xl text-xs font-bold shrink-0"
                                     style={{ background: 'rgba(124,58,237,0.2)', color: '#9D5FF3' }}>
-                                    Copy
+                                    Copy ID
                                 </button>
                             </div>
 
@@ -337,6 +331,54 @@ function CreateGroupModal({ onClose }) {
 }
 
 /* ══════════════════════════════════════════
+   JOIN GROUP MODAL
+══════════════════════════════════════════ */
+function JoinGroupModal({ onClose }) {
+    const { joinGroup } = useApp()
+    const navigate = useNavigate()
+    const [groupId, setGroupId] = useState('')
+    const [loading, setLoading] = useState(false)
+
+    const handleJoin = async () => {
+        if (!groupId.trim()) return
+        setLoading(true)
+        try {
+            const group = await joinGroup(groupId.trim())
+            toast.success(`Joined ${group.name}!`)
+            onClose()
+            navigate(`/groups/${group.id}`)
+        } catch (e) {
+            toast.error(e.message || 'Invalid ID or already joined')
+            setLoading(false)
+        }
+    }
+
+    return (
+        <motion.div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+            <motion.div className="relative w-full max-w-sm z-10 glass p-6 rounded-3xl"
+                initial={{ y: 50, scale: 0.95, opacity: 0 }} animate={{ y: 0, scale: 1, opacity: 1 }} exit={{ y: 20, scale: 0.95, opacity: 0 }}>
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-extrabold text-white">Join by ID</h2>
+                    <button onClick={onClose} className="p-2 bg-white/5 rounded-full hover:bg-white/10"><X size={16} className="text-[#94A3B8]" /></button>
+                </div>
+                <div className="mb-6">
+                    <p className="text-xs text-[#94A3B8] mb-3">Paste the Group ID given by your friend.</p>
+                    <input type="text" placeholder="group-123..."
+                        value={groupId} onChange={e => setGroupId(e.target.value)}
+                        className="input-field w-full font-mono text-sm" autoFocus />
+                </div>
+                <button onClick={handleJoin} disabled={!groupId.trim() || loading}
+                    className="btn-primary w-full shadow-md shadow-blue-500/20">
+                    {loading ? 'Joining...' : 'Join Group 🚀'}
+                </button>
+            </motion.div>
+        </motion.div>
+    )
+}
+
+/* ══════════════════════════════════════════
    GROUPS PAGE
 ══════════════════════════════════════════ */
 export default function GroupsPage() {
@@ -344,6 +386,7 @@ export default function GroupsPage() {
     const { groups, expenses, currentUser } = useApp()
     const [search, setSearch] = useState('')
     const [showCreate, setShowCreate] = useState(false)
+    const [showJoin, setShowJoin] = useState(false)
 
     const filtered = groups.filter(g => g.name.toLowerCase().includes(search.toLowerCase()))
 
@@ -360,14 +403,21 @@ export default function GroupsPage() {
                             {groups.length === 0 ? 'No groups yet' : `${groups.length} active group${groups.length !== 1 ? 's' : ''}`}
                         </p>
                     </div>
-                    <motion.button
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-2xl font-bold text-sm text-white"
-                        style={{ background: 'linear-gradient(135deg, #7C3AED, #3B82F6)' }}
-                        whileHover={{ scale: 1.03, boxShadow: '0 6px 20px rgba(124,58,237,0.4)' }}
-                        whileTap={{ scale: 0.96 }}
-                        onClick={() => setShowCreate(true)}>
-                        <Plus size={18} /> New Group
-                    </motion.button>
+                    <div className="flex items-center gap-2">
+                        <motion.button
+                            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl font-bold text-sm text-[#94A3B8] bg-white/5 hover:bg-white/10 border border-white/5 shadow-md"
+                            whileTap={{ scale: 0.96 }}
+                            onClick={() => setShowJoin(true)}>
+                            Join
+                        </motion.button>
+                        <motion.button
+                            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl font-bold text-sm text-white shadow-md shadow-purple-500/20"
+                            style={{ background: 'linear-gradient(135deg, #7C3AED, #3B82F6)' }}
+                            whileTap={{ scale: 0.96 }}
+                            onClick={() => setShowCreate(true)}>
+                            <Plus size={16} /> New
+                        </motion.button>
+                    </div>
                 </motion.div>
 
                 {/* Search */}
@@ -388,13 +438,19 @@ export default function GroupsPage() {
                         <div className="text-5xl mb-4">👥</div>
                         <p className="text-white font-bold text-lg mb-2">No groups yet</p>
                         <p className="text-[#94A3B8] text-sm mb-6 max-w-xs mx-auto">
-                            Create a group for trips, flatmates, or any shared expenses
+                            Create a group for trips, flatmates, or join an existing one
                         </p>
-                        <motion.button className="px-6 py-3 rounded-2xl font-bold text-sm text-white"
-                            style={{ background: 'linear-gradient(135deg, #7C3AED, #3B82F6)' }}
-                            onClick={() => setShowCreate(true)} whileTap={{ scale: 0.97 }}>
-                            + Create your first group
-                        </motion.button>
+                        <div className="flex flex-col gap-3 w-4/5 mx-auto">
+                            <motion.button className="w-full px-6 py-3 rounded-2xl font-bold text-sm text-white shadow-md shadow-purple-500/20"
+                                style={{ background: 'linear-gradient(135deg, #7C3AED, #3B82F6)' }}
+                                onClick={() => setShowCreate(true)} whileTap={{ scale: 0.97 }}>
+                                + Create New Group
+                            </motion.button>
+                            <motion.button className="w-full px-6 py-3 rounded-2xl font-bold text-sm text-[#94A3B8] bg-white/5 border border-white/10"
+                                onClick={() => setShowJoin(true)} whileTap={{ scale: 0.97 }}>
+                                Join with Group ID
+                            </motion.button>
+                        </div>
                     </motion.div>
                 )}
 
@@ -462,6 +518,7 @@ export default function GroupsPage() {
 
             <AnimatePresence>
                 {showCreate && <CreateGroupModal onClose={() => setShowCreate(false)} />}
+                {showJoin && <JoinGroupModal onClose={() => setShowJoin(false)} />}
             </AnimatePresence>
         </div>
     )
