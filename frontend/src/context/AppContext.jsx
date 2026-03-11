@@ -25,7 +25,7 @@ export function AppProvider({ children }) {
             // Step 1: get group IDs this user belongs to
             const { data: memberRows } = await supabase
                 .from('group_members')
-                .select('group_id, groups(id, name, emoji, created_at)')
+                .select('group_id, groups(id, name, emoji, created_at, created_by)')
                 .eq('user_id', userId)
 
             if (!memberRows?.length) return
