@@ -365,6 +365,23 @@ export function AppProvider({ children }) {
         } catch (e) { console.error('removeMember error:', e) }
     }
 
+    const deleteGroup = async (groupId) => {
+        if (!SUPABASE_CONFIGURED) return
+        try {
+            await supabase.from('groups').delete().eq('id', groupId)
+            setGroups(prev => prev.filter(g => g.id !== groupId))
+            setExpenses(prev => prev.filter(e => e.group_id !== groupId))
+        } catch (e) { console.error('deleteGroup error:', e) }
+    }
+
+    const deleteExpense = async (expenseId) => {
+        if (!SUPABASE_CONFIGURED) return
+        try {
+            await supabase.from('expenses').delete().eq('id', expenseId)
+            setExpenses(prev => prev.filter(e => e.id !== expenseId))
+        } catch (e) { console.error('deleteExpense error:', e) }
+    }
+
     const getUserById = id => id === currentUser?.id ? currentUser : friends.find(f => f.id === id) || null
     const getGroupById = id => groups.find(g => g.id === id) || null
     const getExpensesByGroup = gid => expenses.filter(e => e.group_id === gid)
@@ -375,8 +392,8 @@ export function AppProvider({ children }) {
         login, logout, completeProfile, needsProfile,
         isLoading, isSupabaseConfigured: SUPABASE_CONFIGURED,
         friends, setFriends,
-        groups, addGroup, joinGroup, removeMember,
-        expenses, addExpense,
+        groups, addGroup, joinGroup, removeMember, deleteGroup,
+        expenses, addExpense, deleteExpense,
         settlements, markSettled,
         getUserById, getGroupById, getExpensesByGroup,
     }

@@ -15,7 +15,7 @@ function MemberBalance({ userId, net, group }) {
     const [c1, c2] = getAvatarColor(user?.full_name || '')
 
     const handleRemove = async () => {
-        if (!window.confirm(`Remove ${user?.full_name} from the group?`)) return;
+        if (!window.confirm(`Remove ${user?.full_name} from the group? This will not automatically settle their debts.`)) return;
         await removeMember(group.id, userId);
         toast.success('Member removed');
     }
@@ -47,7 +47,7 @@ function MemberBalance({ userId, net, group }) {
                 )}
             </div>
 
-            {iAmAdmin && !isMe && Math.abs(net) < 1 && (
+            {iAmAdmin && !isMe && (
                 <button onClick={handleRemove} className="p-1.5 rounded-lg ml-1 hover:bg-white/5" title="Remove Member">
                     <Trash2 size={14} className="text-red-400" />
                 </button>
@@ -153,7 +153,7 @@ function SettleTransactions({ transactions, group }) {
 export default function GroupDetailPage() {
     const { id } = useParams()
     const navigate = useNavigate()
-    const { getGroupById, getExpensesByGroup, getUserById, currentUser } = useApp()
+    const { getGroupById, getExpensesByGroup, getUserById, currentUser, deleteGroup, deleteExpense } = useApp()
 
     const group = getGroupById(id)
     const expenses = getExpensesByGroup(id)
@@ -313,11 +313,26 @@ export default function GroupDetailPage() {
                                                 <p className="text-xs text-[#475569] mt-0.5 italic">"{exp.note}"</p>
                                             )}
                                         </div>
-                                        <div className="text-right shrink-0">
+                                        <div className="text-right shrink-0 flex flex-col items-end">
                                             <p className="font-extrabold text-white text-sm">{formatAmount(exp.amount)}</p>
                                             <p className="text-[10px] text-[#94A3B8] mt-0.5">
                                                 your share: <span className="text-[#F43F5E] font-semibold">{formatAmount(myShare)}</span>
                                             </p>
+                                            {(currentUser?.id === group.created_by || exp.created_by === currentUser?.id) && (
+                                                <button
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        if (window.confirm("Delete this expense?")) {
+                                                            await deleteExpense(exp.id);
+                                                            toast.success('Expense deleted');
+                                                        }
+                                                    }}
+                                                    className="mt-2 text-[#94A3B8] hover:text-red-400 p-1"
+                                                    title="Delete Expense"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
 
@@ -353,6 +368,24 @@ export default function GroupDetailPage() {
                                 <MemberBalance key={mid} userId={mid} net={balances[mid] || 0} group={group} />
                             ))}
                         </div>
+                    </div>
+                )}
+
+                {/* Admin Dashboard */}
+                {currentUser?.id === group.created_by && (
+                    <div className="mt-8 pt-6 border-t border-white/10">
+                        <button
+                            onClick={async () => {
+                                if (window.confirm(`Are you sure you want to delete "${group.name}"? This will permanently delete the group and ALL its expenses.`)) {
+                                    await deleteGroup(group.id);
+                                    toast.success('Group deleted permanently');
+                                    navigate('/');
+                                }
+                            }}
+                            className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl border border-red-500/30 text-red-500 font-bold hover:bg-red-500/10 transition-colors bg-red-500/5 shadow-lg shadow-red-500/5"
+                        >
+                            <Trash2 size={16} /> Delete Entire Group
+                        </button>
                     </div>
                 )}
             </div>
