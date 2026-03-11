@@ -2,6 +2,13 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 import { supabase, onAuthChange, fetchUserProfile, upsertUserProfile, signOut, claimPendingInvites } from '../services/supabase'
 import { MOCK_FRIENDS, MOCK_GROUPS, MOCK_EXPENSES, MOCK_SETTLEMENTS } from '../utils/mockData'
 
+/** Wraps a promise with a timeout — avoids hanging on slow/missing DB */
+const withTimeout = (promise, ms = 6000) =>
+    Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+    ])
+
 const AppContext = createContext(null)
 
 const SUPABASE_CONFIGURED =
@@ -204,17 +211,30 @@ export function AppProvider({ children }) {
 
         if (SUPABASE_CONFIGURED && currentUser) {
             try {
-                const { data: inserted } = await supabase
-                    .from('groups')
-                    .insert({ id, name: g.name, emoji: g.emoji, created_by: currentUser.id, created_at: g.created_at })
-                    .select().single()
+                // Insert group row with a timeout — if tables don't exist or network is slow,
+                // we fall through and still create the group in local state
+                const { data: inserted, error: insertErr } = await withTimeout(
+                    supabase
+                        .from('groups')
+                        .insert({ id, name: g.name, emoji: g.emoji, created_by: currentUser.id, created_at: g.created_at })
+                        .select().single()
+                )
+
+                if (insertErr) throw insertErr
+
                 const groupId = inserted?.id || id
                 g.id = groupId
+
                 const memberIds = [...new Set([currentUser.id, ...group.members])]
-                await supabase.from('group_members').insert(
-                    memberIds.map(uid => ({ group_id: groupId, user_id: uid }))
+                await withTimeout(
+                    supabase.from('group_members').insert(
+                        memberIds.map(uid => ({ group_id: groupId, user_id: uid }))
+                    )
                 )
-            } catch (err) { console.warn('addGroup error:', err) }
+            } catch (err) {
+                const reason = err?.message === 'timeout' ? 'DB timeout' : (err?.message || err?.code || 'unknown')
+                console.warn(`addGroup DB save skipped (${reason}) — group saved locally only`)
+            }
         }
 
         setGroups(prev => [g, ...prev])

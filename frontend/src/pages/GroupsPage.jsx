@@ -53,15 +53,29 @@ function CreateGroupModal({ onClose }) {
     const create = async () => {
         if (!name.trim()) return
         setLoading(true)
-        const members = [currentUser.id, ...selected]
-        const group = await addGroup({ name: name.trim(), emoji, members })
-        if (isSupabaseConfigured && inviteList.length > 0) {
-            try { await addPendingMembers(group.id, inviteList, currentUser.id) }
-            catch (e) { console.warn('pending invite error', e) }
+
+        // Safety: if anything hangs > 10s, force-complete so UI never gets stuck
+        const safety = setTimeout(() => {
+            setLoading(false)
+            toast.error('DB save timed out — run SQL tables in Supabase to persist data.')
+        }, 10000)
+
+        try {
+            const members = [currentUser.id, ...selected]
+            const group = await addGroup({ name: name.trim(), emoji, members })
+            if (isSupabaseConfigured && inviteList.length > 0) {
+                try { await addPendingMembers(group.id, inviteList, currentUser.id) }
+                catch (e) { console.warn('pending invite error', e) }
+            }
+            clearTimeout(safety)
+            setLoading(false)
+            setCreatedGroup(group)
+            setStep('share')
+        } catch (e) {
+            clearTimeout(safety)
+            setLoading(false)
+            toast.error('Something went wrong, please try again.')
         }
-        setLoading(false)
-        setCreatedGroup(group)
-        setStep('share')
     }
 
     const goToGroup = () => { onClose(); navigate(`/groups/${createdGroup.id}`) }
