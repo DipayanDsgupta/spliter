@@ -289,6 +289,7 @@ export default function GroupDetailPage() {
                         {[...expenses].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map((exp, i) => {
                             const cat = CATEGORIES.find(c => c.id === exp.category) || CATEGORIES[7]
                             const payers = exp.paid_by.map(p => getUserById(p.user_id)?.full_name?.split(' ')[0]).join(', ')
+                            const splitAmong = exp.splits.map(s => getUserById(s.user_id)?.full_name?.split(' ')[0]).join(', ')
                             const myShare = exp.splits.find(s => s.user_id === currentUser?.id)?.amount_owed || 0
 
                             return (
@@ -311,8 +312,11 @@ export default function GroupDetailPage() {
                                             <p className="text-xs text-[#94A3B8] mt-0.5">
                                                 Paid by {payers} · {formatDate(exp.created_at)}
                                             </p>
+                                            <p className="text-[10px] text-[#64748B] mt-0.5 leading-tight">
+                                                For: {splitAmong}
+                                            </p>
                                             {exp.note && (
-                                                <p className="text-xs text-[#475569] mt-0.5 italic">"{exp.note}"</p>
+                                                <p className="text-xs text-[#475569] mt-1 italic">"{exp.note}"</p>
                                             )}
                                         </div>
                                         <div className="text-right shrink-0 flex flex-col items-end">
