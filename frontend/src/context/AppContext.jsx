@@ -1,13 +1,6 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, onAuthChange, fetchUserProfile, upsertUserProfile, signOut, claimPendingInvites } from '../services/supabase'
 import { MOCK_FRIENDS, MOCK_GROUPS, MOCK_EXPENSES, MOCK_SETTLEMENTS } from '../utils/mockData'
-
-/** Wraps a promise with a timeout — avoids hanging on slow/missing DB */
-const withTimeout = (promise, ms = 6000) =>
-    Promise.race([
-        promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
-    ])
 
 const AppContext = createContext(null)
 
@@ -99,21 +92,27 @@ export function AppProvider({ children }) {
     }
 
     /* ── Handle profile-complete session (existing user login) ── */
+    const sessionHandled = useRef(false)
+
     const handleUserSession = useCallback(async (authUser) => {
+        // Prevent double-init from getSession + onAuthChange firing simultaneously
+        if (sessionHandled.current) return
+        sessionHandled.current = true
+
         try {
             const { data } = await fetchUserProfile(authUser.id)
 
             if (data?.full_name && data?.upi_id) {
                 setCurrentUser({ id: authUser.id, email: authUser.email || '', ...data })
                 setNeedsProfile(false)
+                setIsLoading(false) // ← Show page IMMEDIATELY — data loads in background
 
-                // Run claim + load in PARALLEL — don't await sequentially
-                await Promise.all([
+                // Background: claim invites + load data (non-blocking)
+                Promise.all([
                     claimPendingInvites(authUser.id, authUser.email, data.phone),
                     claimJoinLink(authUser.id),
-                ])
-                // Load data after claiming (so newly joined groups appear)
-                await loadUserData(authUser.id)
+                ]).then(() => loadUserData(authUser.id))
+                    .catch(err => console.warn('Background load error:', err))
             } else {
                 // New user — profile incomplete, send to setup
                 setCurrentUser({
@@ -122,11 +121,12 @@ export function AppProvider({ children }) {
                     full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || '',
                 })
                 setNeedsProfile(true)
+                setIsLoading(false)
             }
         } catch (e) {
             console.error('Session init error:', e)
-        } finally {
             setIsLoading(false)
+            sessionHandled.current = false // allow retry on error
         }
     }, [loadUserData])
 
@@ -139,14 +139,24 @@ export function AppProvider({ children }) {
             return
         }
 
+        // Reset guard on mount so re-renders work correctly
+        sessionHandled.current = false
+
         supabase.auth.getSession().then(({ data: { session } }) => {
             if (session?.user) handleUserSession(session.user)
             else setIsLoading(false)
         })
 
         const { data: { subscription } } = onAuthChange(async (event, session) => {
-            if (event === 'SIGNED_IN' && session?.user) await handleUserSession(session.user)
-            if (event === 'SIGNED_OUT') { setCurrentUser(null); setNeedsProfile(false); setIsLoading(false) }
+            if (event === 'SIGNED_IN' && session?.user) {
+                await handleUserSession(session.user)
+            }
+            if (event === 'SIGNED_OUT') {
+                sessionHandled.current = false
+                setCurrentUser(null)
+                setNeedsProfile(false)
+                setIsLoading(false)
+            }
         })
 
         return () => subscription.unsubscribe()
@@ -156,21 +166,47 @@ export function AppProvider({ children }) {
     useEffect(() => {
         if (!SUPABASE_CONFIGURED || !currentUser) return
 
-        let debounceTimer;
+        let debounceTimer
+        let pollInterval
+
         const triggerReload = () => {
             clearTimeout(debounceTimer)
             debounceTimer = setTimeout(() => {
                 loadUserData(currentUser.id)
-            }, 300) // debounce by 300ms so we don't fetch wildly when multiple rows insert
+            }, 300)
         }
 
-        const channel = supabase.channel('public:spliter_activity')
+        // Subscribe to realtime changes
+        const channel = supabase.channel(`spliter_sync_${currentUser.id}`)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_splits' }, triggerReload)
-            .subscribe()
+            .subscribe((status, err) => {
+                if (status === 'SUBSCRIBED') {
+                    console.log('Realtime connected ✅')
+                    // Clear fallback poll if realtime is working
+                    clearInterval(pollInterval)
+                }
+                if (status === 'CHANNEL_ERROR') {
+                    console.warn('Realtime error, falling back to polling:', err)
+                    // Start fallback polling every 30s if realtime fails
+                    if (!pollInterval) {
+                        pollInterval = setInterval(() => loadUserData(currentUser.id), 30000)
+                    }
+                }
+                if (status === 'TIMED_OUT') {
+                    console.warn('Realtime timed out, retrying...')
+                }
+            })
 
-        return () => { supabase.removeChannel(channel); clearTimeout(debounceTimer) }
+        // Safety: start a fallback poll that gets cleared once realtime connects
+        pollInterval = setInterval(() => loadUserData(currentUser.id), 30000)
+
+        return () => {
+            supabase.removeChannel(channel)
+            clearTimeout(debounceTimer)
+            clearInterval(pollInterval)
+        }
     }, [currentUser, loadUserData])
 
     /* ── completeProfile — returns redirectTo if user came via invite link ── */
@@ -186,7 +222,8 @@ export function AppProvider({ children }) {
         const userId = authData?.user?.id
         if (!userId) return { error: { message: 'Not authenticated' }, redirectTo: null }
 
-        const normalizedPhone = `+91${phone.replace(/\D/g, '').slice(-10)}`
+        const digits = phone.replace(/\D/g, '').slice(-10)
+        const normalizedPhone = digits.length === 10 ? `+91${digits}` : phone
         const { data, error } = await upsertUserProfile({
             id: userId, email: currentUser?.email || '',
             full_name, phone: normalizedPhone,
