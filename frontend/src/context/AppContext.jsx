@@ -42,15 +42,24 @@ export function AppProvider({ children }) {
 
             // Step 2: fetch all-group-members + expenses IN PARALLEL
             const [membersRes, expensesRes] = await Promise.all([
-                supabase.from('group_members').select('group_id, user_id').in('group_id', groupIds),
+                supabase.from('group_members').select('group_id, user_id, users(*)').in('group_id', groupIds),
                 supabase.from('expenses').select('*, expense_splits(*)').in('group_id', groupIds).order('created_at', { ascending: false }),
             ])
 
-            // Populate members per group
+            // Populate members per group & build friends list
             if (membersRes.data) {
                 loadedGroups.forEach(g => {
                     g.members = membersRes.data.filter(m => m.group_id === g.id).map(m => m.user_id)
                 })
+
+                // Extract unique friends (all users from all groups excluding self)
+                const uniqueUsers = new Map()
+                membersRes.data.forEach(m => {
+                    if (m.users && m.users.id !== userId) {
+                        uniqueUsers.set(m.users.id, m.users)
+                    }
+                })
+                setFriends(Array.from(uniqueUsers.values()))
             }
             setGroups(loadedGroups)
 
