@@ -91,29 +91,34 @@ export function AppProvider({ children }) {
 
     /* ── Handle profile-complete session (existing user login) ── */
     const handleUserSession = useCallback(async (authUser) => {
-        const { data } = await fetchUserProfile(authUser.id)
+        try {
+            const { data } = await fetchUserProfile(authUser.id)
 
-        if (data?.full_name && data?.upi_id) {
-            setCurrentUser({ id: authUser.id, email: authUser.email || '', ...data })
-            setNeedsProfile(false)
+            if (data?.full_name && data?.upi_id) {
+                setCurrentUser({ id: authUser.id, email: authUser.email || '', ...data })
+                setNeedsProfile(false)
 
-            // Run claim + load in PARALLEL — don't await sequentially
-            await Promise.all([
-                claimPendingInvites(authUser.id, authUser.email, data.phone),
-                claimJoinLink(authUser.id),
-            ])
-            // Load data after claiming (so newly joined groups appear)
-            await loadUserData(authUser.id)
-        } else {
-            // New user — profile incomplete, send to setup
-            setCurrentUser({
-                id: authUser.id,
-                email: authUser.email || authUser.user_metadata?.email || '',
-                full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || '',
-            })
-            setNeedsProfile(true)
+                // Run claim + load in PARALLEL — don't await sequentially
+                await Promise.all([
+                    claimPendingInvites(authUser.id, authUser.email, data.phone),
+                    claimJoinLink(authUser.id),
+                ])
+                // Load data after claiming (so newly joined groups appear)
+                await loadUserData(authUser.id)
+            } else {
+                // New user — profile incomplete, send to setup
+                setCurrentUser({
+                    id: authUser.id,
+                    email: authUser.email || authUser.user_metadata?.email || '',
+                    full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || '',
+                })
+                setNeedsProfile(true)
+            }
+        } catch (e) {
+            console.error('Session init error:', e)
+        } finally {
+            setIsLoading(false)
         }
-        setIsLoading(false)
     }, [loadUserData])
 
     /* ── Auth bootstrapping ── */
@@ -142,16 +147,21 @@ export function AppProvider({ children }) {
     useEffect(() => {
         if (!SUPABASE_CONFIGURED || !currentUser) return
 
+        let debounceTimer;
+        const triggerReload = () => {
+            clearTimeout(debounceTimer)
+            debounceTimer = setTimeout(() => {
+                loadUserData(currentUser.id)
+            }, 300) // debounce by 300ms so we don't fetch wildly when multiple rows insert
+        }
+
         const channel = supabase.channel('public:spliter_activity')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, () => {
-                loadUserData(currentUser.id)
-            })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => {
-                loadUserData(currentUser.id)
-            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_splits' }, triggerReload)
             .subscribe()
 
-        return () => { supabase.removeChannel(channel) }
+        return () => { supabase.removeChannel(channel); clearTimeout(debounceTimer) }
     }, [currentUser, loadUserData])
 
     /* ── completeProfile — returns redirectTo if user came via invite link ── */
@@ -217,18 +227,41 @@ export function AppProvider({ children }) {
     /* ── Data helpers ── */
     const addExpense = async (expense) => {
         const id = `exp-${Date.now()}`
-        const e = { ...expense, id, created_at: new Date().toISOString() }
+        const { paid_by, splits, ...insertData } = expense
+        const e = { ...insertData, id, created_at: new Date().toISOString() }
 
         if (SUPABASE_CONFIGURED && currentUser) {
             e.created_by = currentUser.id
             const { data, error } = await supabase.from('expenses').insert(e).select().single()
-            if (error) throw error
-            setExpenses(prev => [(data || e), ...prev])
-            return (data || e)
+            if (error) throw new Error(error.message || "Failed to save expense base")
+
+            // Build the expense_splits rows
+            const splitRows = []
+            const combinedUserIds = [...new Set([...paid_by.map(p => p.user_id), ...splits.map(s => s.user_id)])]
+
+            for (const uid of combinedUserIds) {
+                const paid = paid_by.find(p => p.user_id === uid)?.amount_paid || 0
+                const owed = splits.find(s => s.user_id === uid)?.amount_owed || 0
+                if (paid > 0 || owed > 0) {
+                    splitRows.push({ expense_id: id, user_id: uid, amount_paid: paid, amount_owed: owed })
+                }
+            }
+
+            const { error: splitErr } = await supabase.from('expense_splits').insert(splitRows)
+            if (splitErr) {
+                // If splits fail, we should probably delete the expense or throw
+                await supabase.from('expenses').delete().eq('id', id)
+                throw new Error("Failed to save expense splits")
+            }
+
+            const fullObj = { ...(data || e), paid_by, splits }
+            setExpenses(prev => [fullObj, ...prev])
+            return fullObj
         }
 
-        setExpenses(prev => [e, ...prev])
-        return e
+        const fullObj = { ...e, paid_by, splits }
+        setExpenses(prev => [fullObj, ...prev])
+        return fullObj
     }
 
     const addGroup = async (group) => {

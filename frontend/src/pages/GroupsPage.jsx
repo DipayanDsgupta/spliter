@@ -71,7 +71,8 @@ function CreateGroupModal({ onClose }) {
         } catch (e) {
             clearTimeout(safety)
             setLoading(false)
-            toast.error('Something went wrong, please try again.')
+            console.error(e)
+            toast.error(`ERROR: ${e?.message || JSON.stringify(e) || 'Unknown'}`)
         }
     }
 
