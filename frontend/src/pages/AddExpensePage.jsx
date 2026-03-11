@@ -119,19 +119,23 @@ export default function AddExpensePage() {
     const handleSubmit = async () => {
         if (!canSubmit()) return
         setLoading(true)
-        await new Promise(r => setTimeout(r, 800))
-        addExpense({
-            group_id: groupId,
-            title: title.trim(),
-            amount: parseFloat(amount),
-            category,
-            note: note.trim(),
-            paid_by: buildPaidBy(),
-            splits: buildSplits(),
-        })
-        setLoading(false)
-        toast.success('Expense added! 🎉')
-        navigate(groupId ? `/groups/${groupId}` : '/')
+        try {
+            await addExpense({
+                group_id: groupId,
+                title: title.trim(),
+                amount: parseFloat(amount),
+                category,
+                note: note.trim(),
+                paid_by: buildPaidBy(),
+                splits: buildSplits(),
+            })
+            setLoading(false)
+            toast.success('Expense added! 🎉')
+            navigate(groupId ? `/groups/${groupId}` : '/')
+        } catch (e) {
+            setLoading(false)
+            toast.error(e.message || 'Failed to add expense')
+        }
     }
 
     return (

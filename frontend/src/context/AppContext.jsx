@@ -215,8 +215,18 @@ export function AppProvider({ children }) {
     }
 
     /* ── Data helpers ── */
-    const addExpense = (expense) => {
-        const e = { ...expense, id: `exp-${Date.now()}`, created_at: new Date().toISOString() }
+    const addExpense = async (expense) => {
+        const id = `exp-${Date.now()}`
+        const e = { ...expense, id, created_at: new Date().toISOString() }
+
+        if (SUPABASE_CONFIGURED && currentUser) {
+            e.created_by = currentUser.id
+            const { data, error } = await supabase.from('expenses').insert(e).select().single()
+            if (error) throw error
+            setExpenses(prev => [(data || e), ...prev])
+            return (data || e)
+        }
+
         setExpenses(prev => [e, ...prev])
         return e
     }
@@ -226,31 +236,25 @@ export function AppProvider({ children }) {
         const g = { ...group, id, created_at: new Date().toISOString(), total_expenses: 0 }
 
         if (SUPABASE_CONFIGURED && currentUser) {
-            try {
-                // Insert group row with a timeout — if tables don't exist or network is slow,
-                // we fall through and still create the group in local state
-                const { data: inserted, error: insertErr } = await withTimeout(
-                    supabase
-                        .from('groups')
-                        .insert({ id, name: g.name, emoji: g.emoji, created_by: currentUser.id, created_at: g.created_at })
-                        .select().single()
-                )
+            const { data: inserted, error: insertErr } = await supabase
+                .from('groups')
+                .insert({ id, name: g.name, emoji: g.emoji, created_by: currentUser.id, created_at: g.created_at })
+                .select().single()
 
-                if (insertErr) throw insertErr
+            if (insertErr) throw new Error(insertErr.message || "Failed to create group in Database")
 
-                const groupId = inserted?.id || id
-                g.id = groupId
+            const groupId = inserted?.id || id
+            g.id = groupId
 
-                const memberIds = [...new Set([currentUser.id, ...group.members])]
-                await withTimeout(
-                    supabase.from('group_members').insert(
-                        memberIds.map(uid => ({ group_id: groupId, user_id: uid }))
-                    )
-                )
-            } catch (err) {
-                const reason = err?.message === 'timeout' ? 'DB timeout' : (err?.message || err?.code || 'unknown')
-                console.warn(`addGroup DB save skipped (${reason}) — group saved locally only`)
-            }
+            const memberIds = [...new Set([currentUser.id, ...group.members])]
+            const { error: memErr } = await supabase.from('group_members').insert(
+                memberIds.map(uid => ({ group_id: groupId, user_id: uid }))
+            )
+
+            if (memErr) throw new Error(memErr.message || "Failed to add members to group")
+
+            setGroups(prev => [g, ...prev])
+            return g
         }
 
         setGroups(prev => [g, ...prev])
