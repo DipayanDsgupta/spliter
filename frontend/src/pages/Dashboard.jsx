@@ -28,11 +28,12 @@ function StatCard({ label, amount, positive, icon: Icon }) {
 }
 
 function GroupCard({ group, onClick }) {
-    const { getExpensesByGroup, currentUser, getUserById } = useApp()
+    const { getExpensesByGroup, currentUser, getUserById, pendingSettlements } = useApp()
     const expenses = getExpensesByGroup(group.id)
 
-    // Calculate user's net in this group
-    const balances = calculateNetBalances(expenses)
+    // Calculate user's net in this group (adjusted for settlements)
+    const groupCompletedSettlements = (pendingSettlements || []).filter(s => s.group_id === group.id && s.status === 'completed')
+    const balances = calculateNetBalances(expenses, groupCompletedSettlements)
     const myNet = balances[currentUser?.id] || 0
 
     return (
@@ -122,10 +123,11 @@ function RecentActivity() {
 
 export default function Dashboard() {
     const navigate = useNavigate()
-    const { currentUser, groups, expenses } = useApp()
+    const { currentUser, groups, expenses, pendingSettlements } = useApp()
 
-    // Calculate overall net balance for current user
-    const allBalances = calculateNetBalances(expenses)
+    // Calculate overall net balance (adjusted for settlements)
+    const completedSettlements = (pendingSettlements || []).filter(s => s.status === 'completed')
+    const allBalances = calculateNetBalances(expenses, completedSettlements)
     const myNet = allBalances[currentUser?.id] || 0
     const totalOwedToMe = Math.max(0, myNet)
     const totalIOwe = Math.max(0, -myNet)

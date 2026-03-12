@@ -1,7 +1,7 @@
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useApp } from '../context/AppContext'
-import { calculateNetBalances, simplifyDebts, formatAmount, generateGooglePayLink, generateSettlementId } from '../utils/helpers'
-import { CheckCircle, TrendingDown, Loader2, X, Check, Clock } from 'lucide-react'
+import { calculateNetBalances, simplifyDebts, formatAmount, formatDate, generateSettlementId } from '../utils/helpers'
+import { CheckCircle, TrendingDown, Loader2, X, Check, Clock, Copy, ChevronDown, ChevronUp } from 'lucide-react'
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 
@@ -12,245 +12,454 @@ export default function BalancesPage() {
         approveSettlement, rejectSettlement
     } = useApp()
 
-    const [loadingPayment, setLoadingPayment] = useState(null)
-    const [cancelingPayment, setCancelingPayment] = useState(null)
-    const [approvingPayment, setApprovingPayment] = useState(null)
-    const [rejectingPayment, setRejectingPayment] = useState(null)
+    // UI states
+    const [payingKey, setPayingKey] = useState(null)   // which transaction shows "I've Paid" input
+    const [payAmount, setPayAmount] = useState('')
+    const [submitting, setSubmitting] = useState(false)
+    const [actionId, setActionId] = useState(null)     // ID being processed (cancel/approve/reject)
+    const [expandedThread, setExpandedThread] = useState({}) // which threads are expanded
 
-    // Global balances across ALL groups
-    const allBalances = calculateNetBalances(expenses)
+    // Get completed settlements for balance calculation
+    const completedSettlements = pendingSettlements.filter(s => s.status === 'completed')
+
+    // Global adjusted balances
+    const allBalances = calculateNetBalances(expenses, completedSettlements)
     const allTransactions = simplifyDebts(allBalances)
-
-    // My transactions only
     const myTransactions = allTransactions.filter(
         t => t.from === currentUser?.id || t.to === currentUser?.id
     )
-
-    // Overall balance
     const myNet = allBalances[currentUser?.id] || 0
 
+    // ─── Clipboard helper ───
+    const copyUpi = (upiId) => {
+        navigator.clipboard.writeText(upiId)
+        toast.success(`UPI ID copied: ${upiId}`, { icon: '📋' })
+    }
+
+    // ─── Payer: submit "I've Paid" request ───
+    const handleSendRequest = async (group, t) => {
+        const amount = parseFloat(payAmount)
+        if (!amount || amount <= 0) {
+            toast.error('Enter a valid amount')
+            return
+        }
+
+        // Calculate max: remaining - already pending
+        const pairPending = pendingSettlements.filter(s =>
+            s.group_id === group.id &&
+            s.payer_id === t.from &&
+            s.receiver_id === t.to &&
+            s.status === 'pending'
+        )
+        const totalPending = pairPending.reduce((sum, s) => sum + Number(s.amount), 0)
+        const maxPayable = Math.round((t.amount - totalPending) * 100) / 100
+
+        if (amount > maxPayable + 0.01) {
+            toast.error(`Maximum you can request is ${formatAmount(maxPayable)}`)
+            return
+        }
+
+        setSubmitting(true)
+        try {
+            await createPendingSettlement({
+                settlementId: generateSettlementId(),
+                groupId: group.id,
+                payerId: currentUser.id,
+                receiverId: t.to,
+                amount
+            })
+            toast.success(`Request for ${formatAmount(amount)} sent!`)
+            setPayingKey(null)
+            setPayAmount('')
+        } catch (e) {
+            console.error(e)
+            toast.error('Failed to send request.')
+        } finally {
+            setSubmitting(false)
+        }
+    }
+
+    // ─── Action handlers ───
+    const handleCancel = async (id) => {
+        setActionId(id)
+        try {
+            await cancelPendingSettlement(id)
+            toast.success('Request cancelled.')
+        } catch { toast.error('Failed.') }
+        finally { setActionId(null) }
+    }
+
+    const handleApprove = async (settlement) => {
+        setActionId(settlement.id)
+        try {
+            await approveSettlement(settlement.id)
+            toast.success(`Approved ${formatAmount(Number(settlement.amount))}! ✅`)
+        } catch { toast.error('Failed to approve.') }
+        finally { setActionId(null) }
+    }
+
+    const handleReject = async (id) => {
+        setActionId(id)
+        try {
+            await rejectSettlement(id)
+            toast('Request rejected.', { icon: '❌' })
+        } catch { toast.error('Failed.') }
+        finally { setActionId(null) }
+    }
+
+    // ─── Toggle settlement thread ───
+    const toggleThread = (key) => {
+        setExpandedThread(prev => ({ ...prev, [key]: !prev[key] }))
+    }
+
+    // ═══════════════════════════════════════
+    //  GROUP BALANCES COMPONENT
+    // ═══════════════════════════════════════
     const GroupBalances = () => (
-        <div className="space-y-3">
+        <div className="space-y-4">
             {groups.map(group => {
                 const groupExpenses = expenses.filter(e => e.group_id === group.id)
-                const balances = calculateNetBalances(groupExpenses)
+                const groupCompletedSettlements = completedSettlements.filter(s => s.group_id === group.id)
+                const balances = calculateNetBalances(groupExpenses, groupCompletedSettlements)
                 const myGroupNet = balances[currentUser?.id] || 0
                 const transactions = simplifyDebts(balances).filter(
                     t => t.from === currentUser?.id || t.to === currentUser?.id
                 )
-                if (Math.abs(myGroupNet) < 0.01) return null
+
+                // Also check for pending requests in this group even if balances are settled
+                const groupPendingRequests = pendingSettlements.filter(s =>
+                    s.group_id === group.id &&
+                    s.status === 'pending' &&
+                    (s.payer_id === currentUser?.id || s.receiver_id === currentUser?.id)
+                )
+
+                if (Math.abs(myGroupNet) < 0.01 && groupPendingRequests.length === 0) return null
 
                 return (
                     <div key={group.id} className="card">
+                        {/* Group header */}
                         <div className="flex items-center gap-3 mb-3">
                             <span className="text-xl">{group.emoji}</span>
                             <div className="flex-1">
                                 <p className="font-bold text-white text-sm">{group.name}</p>
                                 <p className="text-xs text-[#94A3B8]">
-                                    {myGroupNet > 0 ? `Others owe you ${formatAmount(myGroupNet)}` : `You owe ${formatAmount(-myGroupNet)}`}
+                                    {myGroupNet > 0
+                                        ? `Others owe you ${formatAmount(myGroupNet)}`
+                                        : myGroupNet < 0
+                                            ? `You owe ${formatAmount(-myGroupNet)}`
+                                            : 'All settled up'}
                                 </p>
                             </div>
-                            <span className="font-extrabold text-base" style={{ color: myGroupNet > 0 ? '#10B981' : '#F43F5E' }}>
-                                {myGroupNet > 0 ? '+' : ''}{formatAmount(myGroupNet)}
-                            </span>
+                            {Math.abs(myGroupNet) >= 0.01 && (
+                                <span className="font-extrabold text-base" style={{ color: myGroupNet > 0 ? '#10B981' : '#F43F5E' }}>
+                                    {myGroupNet > 0 ? '+' : ''}{formatAmount(myGroupNet)}
+                                </span>
+                            )}
                         </div>
 
+                        {/* Each transaction / debt line */}
                         {transactions.map((t, i) => {
                             const fromUser = getUserById(t.from)
                             const toUser = getUserById(t.to)
                             const isMyPayment = t.from === currentUser?.id
                             const isMyReceivable = t.to === currentUser?.id
-                            const key = `${group.id}-${i}`
+                            const key = `${group.id}-${t.from}-${t.to}`
 
-                            // Find if there's an ongoing or completed settlement for this exact debt
-                            const activeSettlement = pendingSettlements.find(s =>
-                                s.group_id === group.id &&
-                                s.payer_id === t.from &&
-                                s.receiver_id === t.to &&
-                                (s.status === 'pending' || s.status === 'completed')
-                            )
+                            // Find ALL settlements for this pair in this group
+                            const pairSettlements = pendingSettlements
+                                .filter(s =>
+                                    s.group_id === group.id &&
+                                    s.payer_id === t.from &&
+                                    s.receiver_id === t.to
+                                )
+                                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
 
-                            const isPending = activeSettlement?.status === 'pending'
-                            const isCompleted = activeSettlement?.status === 'completed'
-
-                            // ─── PAYER: initiate payment ───
-                            const handlePay = async () => {
-                                if (!toUser?.upi_id) {
-                                    toast.error(`${toUser?.full_name || 'User'} has not added a UPI ID.`)
-                                    return
-                                }
-                                setLoadingPayment(key)
-                                try {
-                                    const settlementId = generateSettlementId()
-                                    await createPendingSettlement({
-                                        settlementId,
-                                        groupId: group.id,
-                                        payerId: currentUser.id,
-                                        receiverId: toUser.id,
-                                        amount: t.amount
-                                    })
-                                    const link = generateGooglePayLink({
-                                        upiId: toUser.upi_id,
-                                        name: toUser.full_name,
-                                        amount: t.amount,
-                                        note: settlementId,
-                                    })
-                                    window.location.href = link
-                                } catch (e) {
-                                    console.error("Payment init failed:", e)
-                                    toast.error("Failed to initialize payment. Try again.")
-                                } finally {
-                                    setLoadingPayment(null)
-                                }
-                            }
-
-                            // ─── PAYER: cancel pending settlement ───
-                            const handleCancel = async () => {
-                                if (!activeSettlement) return
-                                setCancelingPayment(activeSettlement.id)
-                                try {
-                                    await cancelPendingSettlement(activeSettlement.id)
-                                    toast.success('Payment request cancelled.')
-                                } catch (e) {
-                                    toast.error('Failed to cancel.')
-                                } finally {
-                                    setCancelingPayment(null)
-                                }
-                            }
-
-                            // ─── RECEIVER: approve payment ───
-                            const handleApprove = async () => {
-                                if (!activeSettlement) return
-                                setApprovingPayment(activeSettlement.id)
-                                try {
-                                    await approveSettlement(activeSettlement.id)
-                                    toast.success(`Payment of ${formatAmount(Number(activeSettlement.amount))} approved! ✅`)
-                                } catch (e) {
-                                    console.error("Approve failed:", e)
-                                    toast.error('Failed to approve payment.')
-                                } finally {
-                                    setApprovingPayment(null)
-                                }
-                            }
-
-                            // ─── RECEIVER: reject payment claim ───
-                            const handleReject = async () => {
-                                if (!activeSettlement) return
-                                setRejectingPayment(activeSettlement.id)
-                                try {
-                                    await rejectSettlement(activeSettlement.id)
-                                    toast('Payment claim rejected.', { icon: '❌' })
-                                } catch (e) {
-                                    toast.error('Failed to reject.')
-                                } finally {
-                                    setRejectingPayment(null)
-                                }
-                            }
+                            const pendingOnes = pairSettlements.filter(s => s.status === 'pending')
+                            const completedOnes = pairSettlements.filter(s => s.status === 'completed')
+                            const totalPending = pendingOnes.reduce((sum, s) => sum + Number(s.amount), 0)
+                            const totalSettled = completedOnes.reduce((sum, s) => sum + Number(s.amount), 0)
+                            const availableToPay = Math.round((t.amount - totalPending) * 100) / 100
+                            const hasThread = pairSettlements.length > 0
+                            const isThreadOpen = expandedThread[key]
+                            const isPayFormOpen = payingKey === key
 
                             return (
-                                <div key={i} className="flex items-center gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-                                    <div className="flex-1">
-                                        <p className="text-sm text-white">
-                                            {isMyPayment
-                                                ? <>You → <span className="font-bold">{toUser?.full_name?.split(' ')[0]}</span></>
-                                                : <><span className="font-bold">{fromUser?.full_name?.split(' ')[0]}</span> → You</>
-                                            }
-                                        </p>
-                                        <p className="text-xs text-[#94A3B8] mt-0.5">{formatAmount(t.amount)}</p>
+                                <div key={i} className="mt-3 pt-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                                    {/* ─── Main debt line ─── */}
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex-1">
+                                            <p className="text-sm text-white font-medium">
+                                                {isMyPayment
+                                                    ? <>You → <span className="font-bold">{toUser?.full_name?.split(' ')[0]}</span></>
+                                                    : <><span className="font-bold">{fromUser?.full_name?.split(' ')[0]}</span> → You</>
+                                                }
+                                            </p>
+                                            <p className="text-xs text-[#94A3B8] mt-0.5">
+                                                {formatAmount(t.amount)} remaining
+                                                {totalSettled > 0 && (
+                                                    <span className="text-green-400/70 ml-1">
+                                                        · {formatAmount(totalSettled)} settled
+                                                    </span>
+                                                )}
+                                            </p>
+                                        </div>
+
+                                        <span className="font-extrabold text-base" style={{ color: isMyPayment ? '#F43F5E' : '#10B981' }}>
+                                            {formatAmount(t.amount)}
+                                        </span>
                                     </div>
 
-                                    {/* ══════ PAYER's VIEW ══════ */}
+                                    {/* ─── Payer actions: Copy UPI + I've Paid ─── */}
+                                    {isMyPayment && (
+                                        <div className="flex items-center gap-2 mt-2.5">
+                                            {toUser?.upi_id && (
+                                                <motion.button
+                                                    onClick={() => copyUpi(toUser.upi_id)}
+                                                    className="text-[11px] font-semibold flex items-center gap-1 px-2.5 py-1.5 rounded-xl transition-colors"
+                                                    style={{
+                                                        background: 'rgba(124,58,237,0.12)',
+                                                        border: '1px solid rgba(124,58,237,0.25)',
+                                                        color: '#A78BFA'
+                                                    }}
+                                                    whileTap={{ scale: 0.93 }}
+                                                >
+                                                    <Copy size={11} /> Copy UPI
+                                                </motion.button>
+                                            )}
 
-                                    {/* Pay button (no active settlement) */}
-                                    {isMyPayment && !isPending && !isCompleted && (
-                                        <motion.button
-                                            onClick={handlePay}
-                                            disabled={loadingPayment === key}
-                                            className="pay-btn flex items-center gap-2"
-                                            whileTap={{ scale: 0.97 }}
-                                        >
-                                            {loadingPayment === key ? <Loader2 size={14} className="animate-spin" /> : '💸 Pay'}
-                                        </motion.button>
-                                    )}
+                                            {availableToPay > 0.01 && (
+                                                <motion.button
+                                                    onClick={() => {
+                                                        if (isPayFormOpen) {
+                                                            setPayingKey(null)
+                                                            setPayAmount('')
+                                                        } else {
+                                                            setPayingKey(key)
+                                                            setPayAmount(availableToPay.toString())
+                                                        }
+                                                    }}
+                                                    className="text-[11px] font-semibold flex items-center gap-1 px-2.5 py-1.5 rounded-xl transition-colors"
+                                                    style={{
+                                                        background: 'rgba(16,185,129,0.12)',
+                                                        border: '1px solid rgba(16,185,129,0.25)',
+                                                        color: '#34D399'
+                                                    }}
+                                                    whileTap={{ scale: 0.93 }}
+                                                >
+                                                    💰 I've Paid
+                                                </motion.button>
+                                            )}
 
-                                    {/* Payer: waiting for receiver's approval */}
-                                    {isMyPayment && isPending && (
-                                        <div className="flex flex-col items-end gap-1.5">
-                                            <div className="flex items-center gap-1.5">
-                                                <span className="text-[10px] font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
-                                                    <Clock size={10} /> Awaiting {toUser?.full_name?.split(' ')[0]}'s approval
+                                            {totalPending > 0 && (
+                                                <span className="text-[10px] text-[#F59E0B] font-medium bg-[#F59E0B]/10 px-2 py-1 rounded-lg border border-[#F59E0B]/20 flex items-center gap-1">
+                                                    <Clock size={9} /> {formatAmount(totalPending)} pending
                                                 </span>
-                                            </div>
-                                            <motion.button
-                                                onClick={handleCancel}
-                                                disabled={cancelingPayment === activeSettlement.id}
-                                                className="text-[10px] font-semibold text-red-400 cursor-pointer hover:bg-red-500/30 flex items-center gap-0.5 bg-red-500/15 px-1.5 py-1 rounded-lg border border-red-500/25 transition-colors"
-                                                whileTap={{ scale: 0.92 }}
-                                                title="Cancel this payment request"
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* ─── "I've Paid" inline form ─── */}
+                                    <AnimatePresence>
+                                        {isPayFormOpen && (
+                                            <motion.div
+                                                initial={{ height: 0, opacity: 0 }}
+                                                animate={{ height: 'auto', opacity: 1 }}
+                                                exit={{ height: 0, opacity: 0 }}
+                                                transition={{ duration: 0.2 }}
+                                                className="overflow-hidden"
                                             >
-                                                {cancelingPayment === activeSettlement.id
-                                                    ? <Loader2 size={10} className="animate-spin" />
-                                                    : <><X size={10} /> Cancel</>
-                                                }
-                                            </motion.button>
+                                                <div className="mt-2.5 p-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                                                    <p className="text-[11px] text-[#94A3B8] font-medium mb-2">
+                                                        How much did you pay {toUser?.full_name?.split(' ')[0]}?
+                                                    </p>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="flex-1 relative">
+                                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-[#94A3B8] font-bold">₹</span>
+                                                            <input
+                                                                type="number"
+                                                                value={payAmount}
+                                                                onChange={e => setPayAmount(e.target.value)}
+                                                                max={availableToPay}
+                                                                step="0.01"
+                                                                className="w-full bg-white/05 border border-white/10 rounded-lg py-2 pl-7 pr-3 text-white text-sm font-semibold outline-none focus:border-purple-500/50"
+                                                                placeholder="0.00"
+                                                                autoFocus
+                                                            />
+                                                        </div>
+                                                        <motion.button
+                                                            onClick={() => handleSendRequest(group, t)}
+                                                            disabled={submitting}
+                                                            className="text-[11px] font-bold px-3 py-2 rounded-lg text-white flex items-center gap-1"
+                                                            style={{ background: 'linear-gradient(135deg, #7C3AED, #3B82F6)' }}
+                                                            whileTap={{ scale: 0.93 }}
+                                                        >
+                                                            {submitting
+                                                                ? <Loader2 size={12} className="animate-spin" />
+                                                                : <>Send <Check size={12} /></>
+                                                            }
+                                                        </motion.button>
+                                                    </div>
+                                                    <p className="text-[10px] text-[#64748B] mt-1.5">
+                                                        {toUser?.full_name?.split(' ')[0]} will need to approve this request
+                                                    </p>
+                                                </div>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
+
+                                    {/* ─── Receiver: pending approval requests ─── */}
+                                    {isMyReceivable && !isMyPayment && pendingOnes.length > 0 && (
+                                        <div className="mt-2.5 space-y-2">
+                                            {pendingOnes.map(s => (
+                                                <motion.div
+                                                    key={s.id}
+                                                    className="p-2.5 rounded-xl flex items-center gap-2"
+                                                    style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}
+                                                    initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
+                                                >
+                                                    <div className="flex-1">
+                                                        <p className="text-[11px] text-[#F59E0B] font-semibold">
+                                                            {fromUser?.full_name?.split(' ')[0]} says paid {formatAmount(Number(s.amount))}
+                                                        </p>
+                                                        <p className="text-[9px] text-[#94A3B8] mt-0.5">
+                                                            Check your Google Pay & approve
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <motion.button
+                                                            onClick={() => handleApprove(s)}
+                                                            disabled={actionId === s.id}
+                                                            className="text-[10px] font-bold text-green-400 bg-green-500/15 hover:bg-green-500/25 px-2 py-1.5 rounded-lg border border-green-500/25 flex items-center gap-0.5 transition-colors"
+                                                            whileTap={{ scale: 0.9 }}
+                                                        >
+                                                            {actionId === s.id ? <Loader2 size={10} className="animate-spin" /> : <><Check size={10} /> Approve</>}
+                                                        </motion.button>
+                                                        <motion.button
+                                                            onClick={() => handleReject(s.id)}
+                                                            disabled={actionId === s.id}
+                                                            className="text-[10px] font-bold text-red-400 bg-red-500/15 hover:bg-red-500/25 px-2 py-1.5 rounded-lg border border-red-500/25 flex items-center gap-0.5 transition-colors"
+                                                            whileTap={{ scale: 0.9 }}
+                                                        >
+                                                            {actionId === s.id ? <Loader2 size={10} className="animate-spin" /> : <><X size={10} /> Reject</>}
+                                                        </motion.button>
+                                                    </div>
+                                                </motion.div>
+                                            ))}
                                         </div>
                                     )}
 
-                                    {/* ══════ RECEIVER's VIEW ══════ */}
-
-                                    {/* Receiver: approve or reject the payer's claim */}
-                                    {isMyReceivable && !isMyPayment && isPending && (
-                                        <div className="flex flex-col items-end gap-1.5">
-                                            <span className="text-[10px] font-medium text-[#F59E0B] bg-[#F59E0B]/10 border border-[#F59E0B]/20 px-2 py-1 rounded-lg">
-                                                {fromUser?.full_name?.split(' ')[0]} says paid {formatAmount(Number(activeSettlement.amount))}
-                                            </span>
-                                            <div className="flex items-center gap-1.5">
-                                                <motion.button
-                                                    onClick={handleApprove}
-                                                    disabled={approvingPayment === activeSettlement.id}
-                                                    className="text-[10px] font-semibold text-green-400 cursor-pointer hover:bg-green-500/30 flex items-center gap-0.5 bg-green-500/15 px-2 py-1 rounded-lg border border-green-500/25 transition-colors"
-                                                    whileTap={{ scale: 0.92 }}
-                                                    title="Confirm you received this payment"
-                                                >
-                                                    {approvingPayment === activeSettlement.id
-                                                        ? <Loader2 size={10} className="animate-spin" />
-                                                        : <><Check size={10} /> Approve</>
-                                                    }
-                                                </motion.button>
-                                                <motion.button
-                                                    onClick={handleReject}
-                                                    disabled={rejectingPayment === activeSettlement.id}
-                                                    className="text-[10px] font-semibold text-red-400 cursor-pointer hover:bg-red-500/30 flex items-center gap-0.5 bg-red-500/15 px-2 py-1 rounded-lg border border-red-500/25 transition-colors"
-                                                    whileTap={{ scale: 0.92 }}
-                                                    title="Reject — payment not received"
-                                                >
-                                                    {rejectingPayment === activeSettlement.id
-                                                        ? <Loader2 size={10} className="animate-spin" />
-                                                        : <><X size={10} /> Reject</>
-                                                    }
-                                                </motion.button>
-                                            </div>
-                                        </div>
+                                    {/* ─── Settlement thread toggle ─── */}
+                                    {hasThread && (
+                                        <button
+                                            className="mt-2 text-[10px] font-semibold text-[#64748B] hover:text-[#94A3B8] flex items-center gap-1 transition-colors"
+                                            onClick={() => toggleThread(key)}
+                                        >
+                                            {isThreadOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                                            {pairSettlements.length} settlement{pairSettlements.length > 1 ? 's' : ''} history
+                                        </button>
                                     )}
 
-                                    {/* ══════ SHARED VIEWS ══════ */}
+                                    {/* ─── Settlement thread (expanded) ─── */}
+                                    <AnimatePresence>
+                                        {isThreadOpen && (
+                                            <motion.div
+                                                initial={{ height: 0, opacity: 0 }}
+                                                animate={{ height: 'auto', opacity: 1 }}
+                                                exit={{ height: 0, opacity: 0 }}
+                                                transition={{ duration: 0.2 }}
+                                                className="overflow-hidden"
+                                            >
+                                                <div className="mt-2 space-y-1.5 pl-3" style={{ borderLeft: '2px solid rgba(124,58,237,0.2)' }}>
+                                                    {pairSettlements.map(s => {
+                                                        const isSettled = s.status === 'completed'
+                                                        const isPending = s.status === 'pending'
+                                                        const isMySentRequest = s.payer_id === currentUser?.id
 
-                                    {/* Settlement completed — visible to both payer and receiver */}
-                                    {isCompleted && (
-                                        <span className="text-xs font-semibold text-green-400 flex items-center gap-1">
-                                            <CheckCircle size={12} /> Settled
-                                        </span>
-                                    )}
+                                                        return (
+                                                            <div key={s.id} className="flex items-center gap-2 py-1">
+                                                                <div className="flex-1">
+                                                                    <p className="text-[11px] font-medium" style={{ color: isSettled ? '#10B981' : '#F59E0B' }}>
+                                                                        {isSettled ? <CheckCircle size={10} className="inline mr-1" /> : <Clock size={10} className="inline mr-1" />}
+                                                                        {formatAmount(Number(s.amount))}
+                                                                        {isSettled && ' · settled'}
+                                                                        {isPending && isMySentRequest && ' · awaiting approval'}
+                                                                        {isPending && !isMySentRequest && ' · needs your approval'}
+                                                                    </p>
+                                                                    <p className="text-[9px] text-[#64748B]">
+                                                                        {s.verified_at
+                                                                            ? formatDate(s.verified_at)
+                                                                            : formatDate(s.created_at)}
+                                                                    </p>
+                                                                </div>
 
-                                    {/* Receiver: no settlement in progress (payer hasn't clicked Pay yet) */}
-                                    {isMyReceivable && !isMyPayment && !isPending && !isCompleted && (
-                                        <span className="text-xs font-semibold text-[#94A3B8] bg-white/05 border border-white/05 px-2 py-1.5 rounded-xl">
-                                            Awaiting
-                                        </span>
-                                    )}
+                                                                {/* Payer can cancel their own pending request */}
+                                                                {isPending && isMySentRequest && (
+                                                                    <motion.button
+                                                                        onClick={() => handleCancel(s.id)}
+                                                                        disabled={actionId === s.id}
+                                                                        className="text-[9px] font-semibold text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded-md border border-red-500/20 flex items-center gap-0.5"
+                                                                        whileTap={{ scale: 0.9 }}
+                                                                    >
+                                                                        {actionId === s.id ? <Loader2 size={8} className="animate-spin" /> : <><X size={8} /> Cancel</>}
+                                                                    </motion.button>
+                                                                )}
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
                                 </div>
                             )
                         })}
+
+                        {/* Show pending requests that don't match any current transaction (edge case: fully settled but request still pending) */}
+                        {(() => {
+                            const orphanedPending = pendingSettlements.filter(s =>
+                                s.group_id === group.id &&
+                                s.status === 'pending' &&
+                                s.receiver_id === currentUser?.id &&
+                                !transactions.some(t => t.from === s.payer_id && t.to === s.receiver_id)
+                            )
+                            if (orphanedPending.length === 0) return null
+                            return orphanedPending.map(s => {
+                                const payer = getUserById(s.payer_id)
+                                return (
+                                    <motion.div
+                                        key={s.id}
+                                        className="mt-3 pt-3 border-t p-2.5 rounded-xl flex items-center gap-2"
+                                        style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}
+                                        initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
+                                    >
+                                        <div className="flex-1">
+                                            <p className="text-[11px] text-[#F59E0B] font-semibold">
+                                                {payer?.full_name?.split(' ')[0]} says paid {formatAmount(Number(s.amount))}
+                                            </p>
+                                            <p className="text-[9px] text-[#94A3B8] mt-0.5">Check your Google Pay & approve</p>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                            <motion.button
+                                                onClick={() => handleApprove(s)}
+                                                disabled={actionId === s.id}
+                                                className="text-[10px] font-bold text-green-400 bg-green-500/15 hover:bg-green-500/25 px-2 py-1.5 rounded-lg border border-green-500/25 flex items-center gap-0.5"
+                                                whileTap={{ scale: 0.9 }}
+                                            >
+                                                {actionId === s.id ? <Loader2 size={10} className="animate-spin" /> : <><Check size={10} /> Approve</>}
+                                            </motion.button>
+                                            <motion.button
+                                                onClick={() => handleReject(s.id)}
+                                                disabled={actionId === s.id}
+                                                className="text-[10px] font-bold text-red-400 bg-red-500/15 hover:bg-red-500/25 px-2 py-1.5 rounded-lg border border-red-500/25 flex items-center gap-0.5"
+                                                whileTap={{ scale: 0.9 }}
+                                            >
+                                                {actionId === s.id ? <Loader2 size={10} className="animate-spin" /> : <><X size={10} /> Reject</>}
+                                            </motion.button>
+                                        </div>
+                                    </motion.div>
+                                )
+                            })
+                        })()}
                     </div>
                 )
             })}
@@ -294,7 +503,7 @@ export default function BalancesPage() {
                 </motion.div>
 
                 {/* Transactions */}
-                {myTransactions.length === 0 ? (
+                {myTransactions.length === 0 && pendingSettlements.filter(s => s.status === 'pending' && (s.payer_id === currentUser?.id || s.receiver_id === currentUser?.id)).length === 0 ? (
                     <div className="text-center py-16">
                         <div className="text-5xl mb-4 float">🎉</div>
                         <h2 className="text-xl font-bold text-white mb-2">All settled up!</h2>
@@ -302,7 +511,7 @@ export default function BalancesPage() {
                     </div>
                 ) : (
                     <>
-                        <h2 className="text-base font-bold text-white mb-4">Pending settlements by group</h2>
+                        <h2 className="text-base font-bold text-white mb-4">Settlements by group</h2>
                         <GroupBalances />
                     </>
                 )}

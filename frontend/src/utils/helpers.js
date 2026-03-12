@@ -46,7 +46,7 @@ export function simplifyDebts(balances) {
  * Calculate net balances for a group
  * expenses: array of { id, amount, paid_by: [{user_id, amount_paid}], splits: [{user_id, amount_owed}] }
  */
-export function calculateNetBalances(expenses) {
+export function calculateNetBalances(expenses, completedSettlements = []) {
     const balances = {}
 
     for (const expense of expenses) {
@@ -58,6 +58,13 @@ export function calculateNetBalances(expenses) {
         for (const split of expense.splits) {
             balances[split.user_id] = (balances[split.user_id] || 0) - split.amount_owed
         }
+    }
+
+    // Apply completed settlements: payer gets credit, receiver gets debit
+    for (const s of completedSettlements) {
+        const amt = Number(s.amount)
+        balances[s.payer_id] = (balances[s.payer_id] || 0) + amt
+        balances[s.receiver_id] = (balances[s.receiver_id] || 0) - amt
     }
 
     return balances

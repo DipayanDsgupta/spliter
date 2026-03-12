@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp, Copy, Trash2 } from 'lucide-react'
+import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp, Copy, Trash2, CheckCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useApp } from '../context/AppContext'
-import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, CATEGORIES, generateGooglePayLink } from '../utils/helpers'
+import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, CATEGORIES } from '../utils/helpers'
 
 function MemberBalance({ userId, net, group }) {
     const { getUserById, currentUser, removeMember } = useApp()
@@ -57,8 +57,7 @@ function MemberBalance({ userId, net, group }) {
 }
 
 function SettleTransactions({ transactions, group }) {
-    const { getUserById, currentUser } = useApp()
-    const [paid, setPaid] = useState({})
+    const { getUserById, currentUser, pendingSettlements } = useApp()
 
     return (
         <div className="space-y-3">
@@ -66,14 +65,11 @@ function SettleTransactions({ transactions, group }) {
                 const fromUser = getUserById(t.from)
                 const toUser = getUserById(t.to)
                 const isMe = t.from === currentUser?.id
-                const isPaid = paid[i]
 
-                const payLink = generateGooglePayLink({
-                    upiId: toUser?.upi_id,
-                    name: toUser?.full_name,
-                    amount: t.amount,
-                    note: `${group?.name} Settlement`,
-                })
+                // Check for settlements on this pair
+                const pairSettled = pendingSettlements
+                    .filter(s => s.group_id === group.id && s.payer_id === t.from && s.receiver_id === t.to && s.status === 'completed')
+                    .reduce((sum, s) => sum + Number(s.amount), 0)
 
                 return (
                     <motion.div
@@ -88,7 +84,6 @@ function SettleTransactions({ transactions, group }) {
                         transition={{ delay: i * 0.07 }}
                     >
                         <div className="flex items-center gap-3">
-                            {/* From */}
                             <div className="text-center">
                                 <div className="avatar text-white text-[10px] mx-auto mb-1"
                                     style={{ background: `linear-gradient(135deg, ${getAvatarColor(fromUser?.full_name)[0]}, ${getAvatarColor(fromUser?.full_name)[1]})` }}>
@@ -96,8 +91,6 @@ function SettleTransactions({ transactions, group }) {
                                 </div>
                                 <p className="text-[10px] text-[#94A3B8]">{isMe ? 'You' : fromUser?.full_name?.split(' ')[0]}</p>
                             </div>
-
-                            {/* Arrow + Amount */}
                             <div className="flex-1 text-center">
                                 <p className="font-extrabold text-white text-base">{formatAmount(t.amount)}</p>
                                 <div className="flex items-center justify-center gap-1 mt-1">
@@ -105,9 +98,12 @@ function SettleTransactions({ transactions, group }) {
                                     <span className="text-purple-400 text-xs">→</span>
                                     <div className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-purple-500/50" />
                                 </div>
+                                {pairSettled > 0 && (
+                                    <p className="text-[10px] text-green-400/70 mt-1 flex items-center justify-center gap-0.5">
+                                        <CheckCircle size={9} /> {formatAmount(pairSettled)} already settled
+                                    </p>
+                                )}
                             </div>
-
-                            {/* To */}
                             <div className="text-center">
                                 <div className="avatar text-white text-[10px] mx-auto mb-1"
                                     style={{ background: `linear-gradient(135deg, ${getAvatarColor(toUser?.full_name)[0]}, ${getAvatarColor(toUser?.full_name)[1]})` }}>
@@ -117,31 +113,19 @@ function SettleTransactions({ transactions, group }) {
                             </div>
                         </div>
 
-                        {/* Pay button (only if it's you who owes) */}
-                        {isMe && !isPaid && (
-                            <motion.a
-                                href={payLink}
-                                className="pay-btn w-full mt-3 justify-center"
-                                style={{ textDecoration: 'none' }}
-                                onClick={() => {
-                                    setTimeout(() => {
-                                        if (window.confirm(`Mark ₹${t.amount} as paid to ${toUser?.full_name}?`)) {
-                                            setPaid(prev => ({ ...prev, [i]: true }))
-                                        }
-                                    }, 500)
-                                }}
-                                whileHover={{ y: -1 }}
+                        {/* Copy UPI + settle hint */}
+                        {isMe && toUser?.upi_id && (
+                            <motion.button
+                                className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-colors"
+                                style={{ background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)', color: '#A78BFA' }}
+                                onClick={() => { navigator.clipboard.writeText(toUser.upi_id); toast.success(`UPI ID copied: ${toUser.upi_id}`) }}
                                 whileTap={{ scale: 0.97 }}
                             >
-                                <span>💸</span>
-                                Pay via Google Pay
-                            </motion.a>
+                                <Copy size={12} /> Copy UPI: {toUser.upi_id}
+                            </motion.button>
                         )}
-
-                        {isPaid && (
-                            <div className="mt-3 text-center text-xs font-semibold text-green-400">
-                                ✓ Marked as paid
-                            </div>
+                        {isMe && (
+                            <p className="text-[10px] text-[#64748B] text-center mt-2">Go to Settle Up tab to mark as paid</p>
                         )}
                     </motion.div>
                 )
@@ -153,7 +137,7 @@ function SettleTransactions({ transactions, group }) {
 export default function GroupDetailPage() {
     const { id } = useParams()
     const navigate = useNavigate()
-    const { getGroupById, getExpensesByGroup, getUserById, currentUser, deleteGroup, deleteExpense } = useApp()
+    const { getGroupById, getExpensesByGroup, getUserById, currentUser, deleteGroup, deleteExpense, pendingSettlements } = useApp()
 
     const group = getGroupById(id)
     const expenses = getExpensesByGroup(id)
@@ -168,7 +152,8 @@ export default function GroupDetailPage() {
 
     if (!group) return null // returning null avoids flashy flashes while it redirects
 
-    const balances = calculateNetBalances(expenses)
+    const groupCompletedSettlements = (pendingSettlements || []).filter(s => s.group_id === id && s.status === 'completed')
+    const balances = calculateNetBalances(expenses, groupCompletedSettlements)
     const transactions = simplifyDebts(balances)
     const totalSpent = expenses.reduce((s, e) => s + e.amount, 0)
 
