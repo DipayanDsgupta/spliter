@@ -1,14 +1,15 @@
 import { motion } from 'framer-motion'
 import { useApp } from '../context/AppContext'
 import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, generateGooglePayLink, generateSettlementId } from '../utils/helpers'
-import { CheckCircle, TrendingDown, Loader2, UploadCloud } from 'lucide-react'
+import { CheckCircle, TrendingDown, Loader2, UploadCloud, X } from 'lucide-react'
 import { useState } from 'react'
 import { supabase } from '../services/supabase'
 import toast from 'react-hot-toast'
 
 export default function BalancesPage() {
-    const { expenses, groups, getUserById, currentUser, pendingSettlements, createPendingSettlement } = useApp()
+    const { expenses, groups, getUserById, currentUser, pendingSettlements, createPendingSettlement, cancelPendingSettlement } = useApp()
     const [loadingPayment, setLoadingPayment] = useState(null)
+    const [cancelingPayment, setCancelingPayment] = useState(null)
 
     const handleUpload = async (e, settlementId) => {
         const file = e.target.files?.[0]
@@ -123,6 +124,19 @@ export default function BalancesPage() {
                                 }
                             }
 
+                            const handleCancel = async () => {
+                                if (!activeSettlement) return
+                                setCancelingPayment(activeSettlement.id)
+                                try {
+                                    await cancelPendingSettlement(activeSettlement.id)
+                                    toast.success('Payment cancelled.')
+                                } catch (e) {
+                                    toast.error('Failed to cancel payment.')
+                                } finally {
+                                    setCancelingPayment(null)
+                                }
+                            }
+
                             return (
                                 <div key={i} className="flex items-center gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
                                     <div className="flex-1">
@@ -148,11 +162,25 @@ export default function BalancesPage() {
 
                                     {isMyPayment && isPending && (
                                         <div className="flex flex-col items-end gap-1.5 mt-1">
-                                            <span className="text-xs font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
-                                                <Loader2 size={12} className="animate-spin" /> Verifying...
-                                            </span>
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-xs font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
+                                                    <Loader2 size={12} className="animate-spin" /> Verifying...
+                                                </span>
+                                                <motion.button
+                                                    onClick={handleCancel}
+                                                    disabled={cancelingPayment === activeSettlement.id}
+                                                    className="text-[10px] font-semibold text-red-400 cursor-pointer hover:bg-red-500/30 flex items-center gap-0.5 bg-red-500/15 px-2 py-1.5 rounded-xl border border-red-500/25 transition-colors"
+                                                    whileTap={{ scale: 0.92 }}
+                                                    title="Cancel this payment and retry"
+                                                >
+                                                    {cancelingPayment === activeSettlement.id
+                                                        ? <Loader2 size={10} className="animate-spin" />
+                                                        : <><X size={10} /> Cancel</>
+                                                    }
+                                                </motion.button>
+                                            </div>
                                             <label className="text-[10px] font-medium text-blue-400 cursor-pointer hover:bg-blue-500/20 flex items-center gap-1 bg-blue-500/10 px-2 py-1 rounded-md border border-blue-500/20 transition-colors">
-                                                <UploadCloud size={10} /> Test Upload Receipt
+                                                <UploadCloud size={10} /> Upload Receipt
                                                 <input
                                                     type="file"
                                                     accept="image/*"

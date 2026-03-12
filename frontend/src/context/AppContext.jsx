@@ -485,6 +485,13 @@ export function AppProvider({ children }) {
         return data
     }
 
+    const cancelPendingSettlement = async (settlementId) => {
+        if (!SUPABASE_CONFIGURED) return
+        const { error } = await supabase.from('settlements_tracker').delete().eq('id', settlementId)
+        if (error) throw error
+        setPendingSettlements(prev => prev.filter(s => s.id !== settlementId))
+    }
+
     const getUserById = id => id === currentUser?.id ? currentUser : friends.find(f => f.id === id) || null
     const getGroupById = id => groups.find(g => g.id === id) || null
     const getExpensesByGroup = gid => expenses.filter(e => e.group_id === gid)
@@ -498,7 +505,7 @@ export function AppProvider({ children }) {
         groups, addGroup, joinGroup, removeMember, deleteGroup,
         expenses, addExpense, deleteExpense,
         settlements, markSettled,
-        pendingSettlements, createPendingSettlement,
+        pendingSettlements, createPendingSettlement, cancelPendingSettlement,
         getUserById, getGroupById, getExpensesByGroup,
     }
 
