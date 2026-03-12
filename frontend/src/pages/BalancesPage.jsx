@@ -1,12 +1,40 @@
 import { motion } from 'framer-motion'
 import { useApp } from '../context/AppContext'
 import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, generateGooglePayLink, generateSettlementId } from '../utils/helpers'
-import { CheckCircle, TrendingDown, Loader2 } from 'lucide-react'
+import { CheckCircle, TrendingDown, Loader2, UploadCloud } from 'lucide-react'
 import { useState } from 'react'
+import { supabase } from '../services/supabase'
+import toast from 'react-hot-toast'
 
 export default function BalancesPage() {
     const { expenses, groups, getUserById, currentUser, pendingSettlements, createPendingSettlement } = useApp()
     const [loadingPayment, setLoadingPayment] = useState(null)
+
+    const handleUpload = async (e, settlementId) => {
+        const file = e.target.files?.[0]
+        if (!file) return
+
+        const reader = new FileReader()
+        reader.onload = async (event) => {
+            const base64Image = event.target.result.split(',')[1] // remove metadata string prefix
+
+            const toastId = toast.loading('Running AI OCR Verification...')
+            try {
+                const { data, error } = await supabase.functions.invoke('verify-receipt', {
+                    body: { base64Image, settlementId }
+                })
+
+                if (error) throw error
+                if (!data?.success) throw new Error(data?.error || 'Verification failed')
+
+                toast.success('Payment verified! Data updated.', { id: toastId })
+            } catch (err) {
+                console.error(err)
+                toast.error(`OCR Failed: ${err.message}`, { id: toastId })
+            }
+        }
+        reader.readAsDataURL(file)
+    }
 
     // Global balances across ALL groups
     const allBalances = calculateNetBalances(expenses)
@@ -119,9 +147,20 @@ export default function BalancesPage() {
                                     )}
 
                                     {isMyPayment && isPending && (
-                                        <span className="text-xs font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
-                                            <Loader2 size={12} className="animate-spin" /> Verifying...
-                                        </span>
+                                        <div className="flex flex-col items-end gap-1.5 mt-1">
+                                            <span className="text-xs font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
+                                                <Loader2 size={12} className="animate-spin" /> Verifying...
+                                            </span>
+                                            <label className="text-[10px] font-medium text-blue-400 cursor-pointer hover:bg-blue-500/20 flex items-center gap-1 bg-blue-500/10 px-2 py-1 rounded-md border border-blue-500/20 transition-colors">
+                                                <UploadCloud size={10} /> Test Upload Receipt
+                                                <input
+                                                    type="file"
+                                                    accept="image/*"
+                                                    className="hidden"
+                                                    onChange={(e) => handleUpload(e, activeSettlement.settlement_id)}
+                                                />
+                                            </label>
+                                        </div>
                                     )}
 
                                     {isCompleted && (
