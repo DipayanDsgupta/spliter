@@ -18,7 +18,11 @@ export function AppProvider({ children }) {
     const [groups, setGroups] = useState(SUPABASE_CONFIGURED ? [] : MOCK_GROUPS)
     const [expenses, setExpenses] = useState(SUPABASE_CONFIGURED ? [] : MOCK_EXPENSES)
     const [settlements, setSettlements] = useState(SUPABASE_CONFIGURED ? [] : MOCK_SETTLEMENTS)
-    const [pendingSettlements, setPendingSettlements] = useState([]) // From settlements_tracker
+    const [pendingSettlements, setPendingSettlements] = useState([])
+    const [friendships, setFriendships] = useState([])
+    const [friendRequests, setFriendRequests] = useState([])
+    const [notifications, setNotifications] = useState([])
+    const [unreadNotifCount, setUnreadNotifCount] = useState(0)
     const prevGroupsRef = useRef([])
 
     /* ── Load groups + expenses in PARALLEL (fast!) ── */
@@ -153,8 +157,11 @@ export function AppProvider({ children }) {
                 Promise.all([
                     claimPendingInvites(authUser.id, authUser.email, data.phone),
                     claimJoinLink(authUser.id),
-                ]).then(() => loadUserData(authUser.id))
-                    .catch(err => console.warn('Background load error:', err))
+                ]).then(() => {
+                    loadUserData(authUser.id)
+                    loadFriendData(authUser.id)
+                    loadNotifications(authUser.id)
+                }).catch(err => console.warn('Background load error:', err))
             } else {
                 // New user — profile incomplete, send to setup
                 setCurrentUser({
@@ -253,13 +260,23 @@ export function AppProvider({ children }) {
         if (!SUPABASE_CONFIGURED || !currentUser) return
 
         let debounceTimer
+        let friendDebounceTimer
+        let notifDebounceTimer
         let pollInterval
 
         const triggerReload = () => {
             clearTimeout(debounceTimer)
-            debounceTimer = setTimeout(() => {
-                loadUserData(currentUser.id)
-            }, 300)
+            debounceTimer = setTimeout(() => loadUserData(currentUser.id), 300)
+        }
+
+        const triggerFriendReload = () => {
+            clearTimeout(friendDebounceTimer)
+            friendDebounceTimer = setTimeout(() => loadFriendData(currentUser.id), 300)
+        }
+
+        const triggerNotifReload = () => {
+            clearTimeout(notifDebounceTimer)
+            notifDebounceTimer = setTimeout(() => loadNotifications(currentUser.id), 300)
         }
 
         // Subscribe to realtime changes
@@ -268,17 +285,22 @@ export function AppProvider({ children }) {
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_splits' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'settlements_tracker' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests' }, triggerFriendReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, triggerFriendReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, triggerNotifReload)
             .subscribe((status, err) => {
                 if (status === 'SUBSCRIBED') {
                     console.log('Realtime connected ✅')
-                    // Clear fallback poll if realtime is working
                     clearInterval(pollInterval)
                 }
                 if (status === 'CHANNEL_ERROR') {
                     console.warn('Realtime error, falling back to polling:', err)
-                    // Start fallback polling every 30s if realtime fails
                     if (!pollInterval) {
-                        pollInterval = setInterval(() => loadUserData(currentUser.id), 30000)
+                        pollInterval = setInterval(() => {
+                            loadUserData(currentUser.id)
+                            loadFriendData(currentUser.id)
+                            loadNotifications(currentUser.id)
+                        }, 30000)
                     }
                 }
                 if (status === 'TIMED_OUT') {
@@ -286,15 +308,20 @@ export function AppProvider({ children }) {
                 }
             })
 
-        // Safety: start a fallback poll that gets cleared once realtime connects
-        pollInterval = setInterval(() => loadUserData(currentUser.id), 30000)
+        pollInterval = setInterval(() => {
+            loadUserData(currentUser.id)
+            loadFriendData(currentUser.id)
+            loadNotifications(currentUser.id)
+        }, 30000)
 
         return () => {
             supabase.removeChannel(channel)
             clearTimeout(debounceTimer)
+            clearTimeout(friendDebounceTimer)
+            clearTimeout(notifDebounceTimer)
             clearInterval(pollInterval)
         }
-    }, [currentUser, loadUserData])
+    }, [currentUser, loadUserData, loadFriendData, loadNotifications])
 
     /* ── completeProfile — returns redirectTo if user came via invite link ── */
     const completeProfile = async ({ full_name, phone, upi_id }) => {
@@ -523,6 +550,172 @@ export function AppProvider({ children }) {
     const getExpensesByGroup = gid => expenses.filter(e => e.group_id === gid)
     const markSettled = id => setSettlements(prev => prev.map(s => s.id === id ? { ...s, status: 'settled' } : s))
 
+    /* ══════════════════════════════════════════
+       FRIEND SYSTEM
+    ══════════════════════════════════════════ */
+
+    /** Load friendships + friend requests for current user */
+    const loadFriendData = useCallback(async (userId) => {
+        if (!SUPABASE_CONFIGURED) return
+        try {
+            const [friendshipsRes, requestsRes] = await Promise.all([
+                supabase.from('friendships').select('*').or(`user_a_id.eq.${userId},user_b_id.eq.${userId}`),
+                supabase.from('friend_requests').select('*').or(`sender_id.eq.${userId},receiver_id.eq.${userId}`).eq('status', 'pending'),
+            ])
+            if (friendshipsRes.data) setFriendships(friendshipsRes.data)
+            if (requestsRes.data) setFriendRequests(requestsRes.data)
+
+            // Fetch friend user profiles
+            const friendUserIds = new Set()
+            friendshipsRes.data?.forEach(f => {
+                if (f.user_a_id !== userId) friendUserIds.add(f.user_a_id)
+                if (f.user_b_id !== userId) friendUserIds.add(f.user_b_id)
+            })
+            requestsRes.data?.forEach(r => {
+                if (r.sender_id !== userId) friendUserIds.add(r.sender_id)
+                if (r.receiver_id !== userId) friendUserIds.add(r.receiver_id)
+            })
+            if (friendUserIds.size > 0) {
+                const { data: friendProfiles } = await supabase.from('users').select('*').in('id', Array.from(friendUserIds))
+                if (friendProfiles) {
+                    setFriends(prev => {
+                        const existing = new Map(prev.map(f => [f.id, f]))
+                        friendProfiles.forEach(fp => existing.set(fp.id, fp))
+                        return Array.from(existing.values())
+                    })
+                }
+            }
+        } catch (e) { console.warn('loadFriendData error:', e) }
+    }, [])
+
+    /** Send a friend request by email */
+    const sendFriendRequest = async (email) => {
+        if (!SUPABASE_CONFIGURED || !currentUser) throw new Error('Not configured')
+        const trimmed = email.trim().toLowerCase()
+        if (trimmed === currentUser.email?.toLowerCase()) throw new Error('Cannot add yourself')
+
+        // Find user by email
+        const { data: targetUser } = await supabase.from('users').select('id, full_name, email').eq('email', trimmed).single()
+        if (!targetUser) throw new Error('No user found with that email. They need to sign up first.')
+
+        // Check if already friends
+        const [idA, idB] = [currentUser.id, targetUser.id].sort()
+        const { data: existing } = await supabase.from('friendships').select('id').eq('user_a_id', idA).eq('user_b_id', idB).single()
+        if (existing) throw new Error(`Already friends with ${targetUser.full_name}`)
+
+        // Check existing pending request
+        const { data: existingReq } = await supabase.from('friend_requests').select('id').eq('sender_id', currentUser.id).eq('receiver_id', targetUser.id).single()
+        if (existingReq) throw new Error('Friend request already sent')
+
+        // Send request
+        const { data, error } = await supabase.from('friend_requests').insert({ sender_id: currentUser.id, receiver_id: targetUser.id }).select().single()
+        if (error) throw error
+        setFriendRequests(prev => [data, ...prev])
+
+        // Create notification for the target user
+        await supabase.from('notifications').insert({
+            user_id: targetUser.id,
+            type: 'friend_request',
+            title: 'New Friend Request',
+            body: `${currentUser.full_name} wants to be your friend`,
+            reference_id: data.id,
+        })
+
+        return targetUser
+    }
+
+    /** Accept a friend request */
+    const acceptFriendRequest = async (requestId) => {
+        if (!SUPABASE_CONFIGURED || !currentUser) return
+        const request = friendRequests.find(r => r.id === requestId)
+        if (!request) throw new Error('Request not found')
+
+        // Update request status
+        await supabase.from('friend_requests').update({ status: 'accepted' }).eq('id', requestId)
+
+        // Create friendship (sorted IDs for uniqueness)
+        const [idA, idB] = [request.sender_id, request.receiver_id].sort()
+        await supabase.from('friendships').upsert({ user_a_id: idA, user_b_id: idB }, { onConflict: 'user_a_id,user_b_id', ignoreDuplicates: true })
+
+        // Notify sender
+        await supabase.from('notifications').insert({
+            user_id: request.sender_id,
+            type: 'friend_accepted',
+            title: 'Friend Request Accepted',
+            body: `${currentUser.full_name} accepted your friend request! 🎉`,
+            reference_id: requestId,
+        })
+
+        setFriendRequests(prev => prev.filter(r => r.id !== requestId))
+        await loadFriendData(currentUser.id)
+    }
+
+    /** Reject a friend request */
+    const rejectFriendRequest = async (requestId) => {
+        if (!SUPABASE_CONFIGURED) return
+        await supabase.from('friend_requests').delete().eq('id', requestId)
+        setFriendRequests(prev => prev.filter(r => r.id !== requestId))
+    }
+
+    /** Remove a friendship */
+    const removeFriend = async (friendshipId) => {
+        if (!SUPABASE_CONFIGURED) return
+        await supabase.from('friendships').delete().eq('id', friendshipId)
+        setFriendships(prev => prev.filter(f => f.id !== friendshipId))
+    }
+
+    /** Get friend ID from a friendship record */
+    const getFriendIdFromFriendship = (friendship) => {
+        if (!currentUser) return null
+        return friendship.user_a_id === currentUser.id ? friendship.user_b_id : friendship.user_a_id
+    }
+
+    /** Check if user is my friend */
+    const isFriend = (userId) => {
+        return friendships.some(f =>
+            (f.user_a_id === currentUser?.id && f.user_b_id === userId) ||
+            (f.user_a_id === userId && f.user_b_id === currentUser?.id)
+        )
+    }
+
+    /* ══════════════════════════════════════════
+       NOTIFICATIONS
+    ══════════════════════════════════════════ */
+
+    const loadNotifications = useCallback(async (userId) => {
+        if (!SUPABASE_CONFIGURED) return
+        try {
+            // Cleanup old notifications (24h+)
+            await supabase.rpc('cleanup_old_notifications', { p_user_id: userId })
+
+            // Fetch remaining
+            const { data } = await supabase
+                .from('notifications')
+                .select('*')
+                .eq('user_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(50)
+            if (data) {
+                setNotifications(data)
+                setUnreadNotifCount(data.filter(n => !n.is_read).length)
+            }
+        } catch (e) { console.warn('loadNotifications error:', e) }
+    }, [])
+
+    const markNotificationRead = async (notifId) => {
+        if (!SUPABASE_CONFIGURED) return
+        await supabase.from('notifications').update({ is_read: true }).eq('id', notifId)
+        setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, is_read: true } : n))
+        setUnreadNotifCount(prev => Math.max(0, prev - 1))
+    }
+
+    const markAllNotificationsRead = async () => {
+        if (!SUPABASE_CONFIGURED || !currentUser) return
+        await supabase.from('notifications').update({ is_read: true }).eq('user_id', currentUser.id).eq('is_read', false)
+        setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
+        setUnreadNotifCount(0)
+    }
+
     const value = {
         currentUser, setCurrentUser,
         login, logout, completeProfile, needsProfile,
@@ -533,6 +726,11 @@ export function AppProvider({ children }) {
         settlements, markSettled,
         pendingSettlements, createPendingSettlement, cancelPendingSettlement, approveSettlement, rejectSettlement,
         getUserById, getGroupById, getExpensesByGroup,
+        // Friend system
+        friendships, friendRequests, sendFriendRequest, acceptFriendRequest, rejectFriendRequest, removeFriend,
+        getFriendIdFromFriendship, isFriend, loadFriendData,
+        // Notifications
+        notifications, unreadNotifCount, loadNotifications, markNotificationRead, markAllNotificationsRead,
     }
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>

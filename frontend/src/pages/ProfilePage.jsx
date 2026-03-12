@@ -2,12 +2,23 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useApp } from '../context/AppContext'
 import { getAvatarColor, getInitials, formatAmount, calculateNetBalances } from '../utils/helpers'
-import { LogOut, Copy, CheckCircle, ChevronRight, Edit2, Save, X } from 'lucide-react'
+import { LogOut, Copy, CheckCircle, ChevronRight, Edit2, Save, X, Bell, Clock, CheckCheck } from 'lucide-react'
 import { upsertUserProfile } from '../services/supabase'
 import toast from 'react-hot-toast'
 
+function getTimeAgo(dateStr) {
+    const diff = Date.now() - new Date(dateStr).getTime()
+    const mins = Math.floor(diff / 60000)
+    if (mins < 1) return 'just now'
+    if (mins < 60) return `${mins}m ago`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24) return `${hrs}h ago`
+    return `${Math.floor(hrs / 24)}d ago`
+}
+
 export default function ProfilePage() {
-    const { currentUser, logout, expenses, groups, setCurrentUser } = useApp()
+    const { currentUser, logout, expenses, groups, setCurrentUser, notifications, unreadNotifCount, markNotificationRead, markAllNotificationsRead, pendingSettlements } = useApp()
+    const [showNotifications, setShowNotifications] = useState(false)
     const [copied, setCopied] = useState(false)
     const [editing, setEditing] = useState(false)
     const [saving, setSaving] = useState(false)
@@ -19,7 +30,8 @@ export default function ProfilePage() {
 
     const [c1, c2] = getAvatarColor(currentUser?.full_name || '')
 
-    const allBalances = calculateNetBalances(expenses)
+    const completedSettlements = (pendingSettlements || []).filter(s => s.status === 'completed')
+    const allBalances = calculateNetBalances(expenses, completedSettlements)
     const myNet = allBalances[currentUser?.id] || 0
     const totalSpent = expenses
         .flatMap(e => e.splits)
@@ -198,19 +210,119 @@ export default function ProfilePage() {
                     )}
                 </AnimatePresence>
 
+                {/* ── Notifications section ── */}
+                <motion.div className="card mb-5" style={{ padding: 0 }}
+                    initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}>
+                    <button
+                        onClick={() => setShowNotifications(!showNotifications)}
+                        className="w-full flex items-center gap-3 px-5 py-4"
+                        style={{ borderBottom: showNotifications ? '1px solid rgba(255,255,255,0.05)' : 'none' }}
+                    >
+                        <span className="text-lg relative">
+                            🔔
+                            {unreadNotifCount > 0 && (
+                                <span className="absolute -top-1 -right-1.5 min-w-[14px] h-3.5 flex items-center justify-center px-0.5 rounded-full text-[8px] font-extrabold text-white"
+                                    style={{ background: '#F43F5E' }}>
+                                    {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+                                </span>
+                            )}
+                        </span>
+                        <span className="flex-1 text-left text-sm font-medium text-white">Notifications</span>
+                        {unreadNotifCount > 0 && (
+                            <span className="text-[10px] font-bold text-[#F43F5E] bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20">
+                                {unreadNotifCount} new
+                            </span>
+                        )}
+                        <ChevronRight size={16} className="text-[#475569]" style={{ transform: showNotifications ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
+                    </button>
+
+                    <AnimatePresence>
+                        {showNotifications && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="overflow-hidden"
+                            >
+                                {/* Mark all read button */}
+                                {unreadNotifCount > 0 && (
+                                    <div className="px-5 py-2 flex justify-end">
+                                        <button
+                                            onClick={markAllNotificationsRead}
+                                            className="text-[10px] font-semibold text-purple-400 flex items-center gap-1 hover:text-purple-300"
+                                        >
+                                            <CheckCheck size={11} /> Mark all read
+                                        </button>
+                                    </div>
+                                )}
+
+                                {notifications.length === 0 ? (
+                                    <div className="px-5 py-6 text-center">
+                                        <p className="text-[#475569] text-xs">No notifications in the last 24 hours</p>
+                                    </div>
+                                ) : (
+                                    <div className="max-h-72 overflow-y-auto">
+                                        {notifications.map((notif, i) => {
+                                            const typeIcons = {
+                                                friend_request: '👋',
+                                                friend_accepted: '🤝',
+                                                expense_added: '💰',
+                                                settlement_request: '📩',
+                                                settlement_approved: '✅',
+                                                settlement_rejected: '❌',
+                                                chat_message: '💬',
+                                            }
+                                            const icon = typeIcons[notif.type] || '🔔'
+                                            const timeAgo = getTimeAgo(notif.created_at)
+
+                                            return (
+                                                <button
+                                                    key={notif.id}
+                                                    onClick={() => !notif.is_read && markNotificationRead(notif.id)}
+                                                    className="w-full flex items-start gap-3 px-5 py-3 text-left transition-colors hover:bg-white/03"
+                                                    style={{
+                                                        borderBottom: i < notifications.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none',
+                                                        background: !notif.is_read ? 'rgba(124,58,237,0.05)' : 'transparent',
+                                                    }}
+                                                >
+                                                    <span className="text-base mt-0.5">{icon}</span>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className={`text-xs font-medium ${!notif.is_read ? 'text-white' : 'text-[#94A3B8]'}`}>
+                                                            {notif.title}
+                                                        </p>
+                                                        {notif.body && (
+                                                            <p className="text-[10px] text-[#64748B] mt-0.5 truncate">{notif.body}</p>
+                                                        )}
+                                                        <p className="text-[9px] text-[#475569] mt-1 flex items-center gap-0.5">
+                                                            <Clock size={8} /> {timeAgo}
+                                                        </p>
+                                                    </div>
+                                                    {!notif.is_read && (
+                                                        <div className="w-2 h-2 rounded-full bg-purple-500 mt-1.5 shrink-0" />
+                                                    )}
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+                                )}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </motion.div>
+
                 {/* ── Settings menu ── */}
                 <motion.div className="card mb-5"
                     style={{ padding: 0 }}
                     initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.25 }}>
+                    transition={{ delay: 0.3 }}>
                     {[
-                        { icon: '🔔', label: 'Notifications', action: () => toast('Coming soon!') },
                         { icon: '🔒', label: 'Privacy & Security', action: () => toast('Coming soon!') },
                         { icon: '❓', label: 'Help & Support', action: () => toast('Coming soon!') },
                     ].map((item, i) => (
                         <button key={item.label} onClick={item.action}
                             className="w-full flex items-center gap-3 px-5 py-4 transition-colors"
-                            style={{ borderBottom: i < 2 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                            style={{ borderBottom: i < 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
                             <span className="text-lg">{item.icon}</span>
                             <span className="flex-1 text-left text-sm font-medium text-white">{item.label}</span>
                             <ChevronRight size={16} className="text-[#475569]" />

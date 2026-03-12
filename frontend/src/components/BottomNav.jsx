@@ -1,11 +1,12 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Home, Users, Activity, TrendingUp, User } from 'lucide-react'
+import { Home, Users, UserCheck, TrendingUp, User } from 'lucide-react'
+import { useApp } from '../context/AppContext'
 
 const NAV_ITEMS = [
     { icon: Home, label: 'Home', path: '/' },
     { icon: Users, label: 'Groups', path: '/groups' },
-    { icon: Activity, label: 'Activity', path: '/activity' },
+    { icon: UserCheck, label: 'Friends', path: '/friends' },
     { icon: TrendingUp, label: 'Settle', path: '/balances' },
     { icon: User, label: 'Profile', path: '/profile' },
 ]
@@ -13,9 +14,10 @@ const NAV_ITEMS = [
 export default function BottomNav() {
     const location = useLocation()
     const navigate = useNavigate()
+    const { unreadNotifCount } = useApp()
 
     // Hide on auth and add expense pages
-    const hide = ['/auth', '/add-expense'].some(p => location.pathname.startsWith(p))
+    const hide = ['/auth', '/add-expense', '/profile-setup'].some(p => location.pathname.startsWith(p))
     if (hide) return null
 
     return (
@@ -23,7 +25,9 @@ export default function BottomNav() {
             <div className="flex items-center justify-around px-2 py-2">
                 {NAV_ITEMS.map(({ icon: Icon, label, path }) => {
                     const isActive = location.pathname === path ||
-                        (path === '/groups' && location.pathname.startsWith('/groups'))
+                        (path === '/groups' && location.pathname.startsWith('/groups')) ||
+                        (path === '/friends' && location.pathname.startsWith('/friends'))
+                    const isProfile = path === '/profile'
                     return (
                         <button
                             key={path}
@@ -42,6 +46,7 @@ export default function BottomNav() {
                             )}
 
                             <motion.div
+                                className="relative"
                                 animate={{
                                     scale: isActive ? 1.15 : 1,
                                     y: isActive ? -1 : 0,
@@ -53,6 +58,15 @@ export default function BottomNav() {
                                     style={{ color: isActive ? '#9D5FF3' : '#475569' }}
                                     strokeWidth={isActive ? 2.5 : 1.8}
                                 />
+                                {/* Notification badge on Profile */}
+                                {isProfile && unreadNotifCount > 0 && (
+                                    <span
+                                        className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 flex items-center justify-center px-1 rounded-full text-[9px] font-extrabold text-white"
+                                        style={{ background: '#F43F5E', boxShadow: '0 0 8px rgba(244,63,94,0.5)' }}
+                                    >
+                                        {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+                                    </span>
+                                )}
                             </motion.div>
                             <span
                                 className="text-[10px] font-semibold relative z-10 transition-colors"
