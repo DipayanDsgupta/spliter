@@ -212,10 +212,6 @@ function CreateGroupModal({ onClose }) {
                                 <div className="mb-5">
                                     <div className="flex items-center gap-2 mb-2">
                                         <p className="label-xs">Add by Email or Phone</p>
-                                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                                            style={{ background: 'rgba(59,130,246,0.15)', color: '#60A5FA' }}>
-                                            works even if not signed up
-                                        </span>
                                     </div>
                                     <div className="flex gap-2">
                                         <input type="text" placeholder="email@example.com or 9876543210"
