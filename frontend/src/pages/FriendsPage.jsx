@@ -1,16 +1,16 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useApp } from '../context/AppContext'
-import { getAvatarColor, getInitials, formatAmount, calculateNetBalances } from '../utils/helpers'
-import { UserPlus, Check, X, Loader2, Search, MessageCircle, ChevronRight, Users } from 'lucide-react'
+import { getAvatarColor, getInitials } from '../utils/helpers'
+import { UserPlus, Check, X, Loader2, Search, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 
 export default function FriendsPage() {
     const {
-        currentUser, friendships, friendRequests, friends,
+        currentUser, friendships, friendRequests,
         sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
-        getFriendIdFromFriendship, getUserById, expenses, pendingSettlements,
+        getFriendIdFromFriendship, getUserById,
     } = useApp()
 
     const navigate = useNavigate()
@@ -24,8 +24,7 @@ export default function FriendsPage() {
     // Sent requests (where I'm the sender)
     const sentRequests = friendRequests.filter(r => r.sender_id === currentUser?.id)
 
-    // Calculate balance for each friend
-    const completedSettlements = pendingSettlements.filter(s => s.status === 'completed')
+
 
     const handleSendRequest = async () => {
         if (!email.trim()) { toast.error('Enter an email address'); return }
@@ -229,11 +228,6 @@ export default function FriendsPage() {
                                 const friendUser = getUserById(friendId)
                                 const [c1, c2] = getAvatarColor(friendUser?.full_name || '')
 
-                                // Calculate balance between me and this friend (across all groups)
-                                const allBalances = calculateNetBalances(expenses, completedSettlements)
-                                // This is a simplified view — shows overall balance
-                                const myNet = allBalances[currentUser?.id] || 0
-
                                 return (
                                     <motion.div
                                         key={friendship.id}
@@ -243,7 +237,7 @@ export default function FriendsPage() {
                                         initial={{ opacity: 0, y: 10 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{ delay: i * 0.05 }}
-                                        onClick={() => toast('Friend detail page coming in Chunk 2! 🚧')}
+                                        onClick={() => navigate(`/chat?friendship=${friendship.id}`)}
                                     >
                                         <div className="flex items-center gap-3">
                                             <div className="avatar text-white text-xs shrink-0"
@@ -254,7 +248,14 @@ export default function FriendsPage() {
                                                 <p className="text-sm font-bold text-white truncate">{friendUser?.full_name}</p>
                                                 <p className="text-[10px] text-[#94A3B8]">{friendUser?.email}</p>
                                             </div>
-                                            <ChevronRight size={16} className="text-[#475569]" />
+                                            <div className="flex items-center gap-1.5">
+                                                <div
+                                                    className="w-8 h-8 rounded-xl flex items-center justify-center"
+                                                    style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)' }}
+                                                >
+                                                    <MessageCircle size={14} className="text-blue-400" />
+                                                </div>
+                                            </div>
                                         </div>
                                     </motion.div>
                                 )
