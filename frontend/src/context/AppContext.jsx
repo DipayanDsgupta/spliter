@@ -255,73 +255,7 @@ export function AppProvider({ children }) {
         }
     }, [handleUserSession])
 
-    /* ── Realtime Data Syncing ── */
-    useEffect(() => {
-        if (!SUPABASE_CONFIGURED || !currentUser) return
-
-        let debounceTimer
-        let friendDebounceTimer
-        let notifDebounceTimer
-        let pollInterval
-
-        const triggerReload = () => {
-            clearTimeout(debounceTimer)
-            debounceTimer = setTimeout(() => loadUserData(currentUser.id), 300)
-        }
-
-        const triggerFriendReload = () => {
-            clearTimeout(friendDebounceTimer)
-            friendDebounceTimer = setTimeout(() => loadFriendData(currentUser.id), 300)
-        }
-
-        const triggerNotifReload = () => {
-            clearTimeout(notifDebounceTimer)
-            notifDebounceTimer = setTimeout(() => loadNotifications(currentUser.id), 300)
-        }
-
-        // Subscribe to realtime changes
-        const channel = supabase.channel(`spliter_sync_${currentUser.id}`)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, triggerReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, triggerReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_splits' }, triggerReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'settlements_tracker' }, triggerReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests' }, triggerFriendReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, triggerFriendReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, triggerNotifReload)
-            .subscribe((status, err) => {
-                if (status === 'SUBSCRIBED') {
-                    console.log('Realtime connected ✅')
-                    clearInterval(pollInterval)
-                }
-                if (status === 'CHANNEL_ERROR') {
-                    console.warn('Realtime error, falling back to polling:', err)
-                    if (!pollInterval) {
-                        pollInterval = setInterval(() => {
-                            loadUserData(currentUser.id)
-                            loadFriendData(currentUser.id)
-                            loadNotifications(currentUser.id)
-                        }, 30000)
-                    }
-                }
-                if (status === 'TIMED_OUT') {
-                    console.warn('Realtime timed out, retrying...')
-                }
-            })
-
-        pollInterval = setInterval(() => {
-            loadUserData(currentUser.id)
-            loadFriendData(currentUser.id)
-            loadNotifications(currentUser.id)
-        }, 30000)
-
-        return () => {
-            supabase.removeChannel(channel)
-            clearTimeout(debounceTimer)
-            clearTimeout(friendDebounceTimer)
-            clearTimeout(notifDebounceTimer)
-            clearInterval(pollInterval)
-        }
-    }, [currentUser, loadUserData, loadFriendData, loadNotifications])
+    /* ── End handleUserSession / Auth bootstrap ── */
 
     /* ── completeProfile — returns redirectTo if user came via invite link ── */
     const completeProfile = async ({ full_name, phone, upi_id }) => {
@@ -715,6 +649,74 @@ export function AppProvider({ children }) {
         setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
         setUnreadNotifCount(0)
     }
+
+    /* ── Realtime Data Syncing (Placed here to avoid TDZ errors) ── */
+    useEffect(() => {
+        if (!SUPABASE_CONFIGURED || !currentUser) return
+
+        let debounceTimer
+        let friendDebounceTimer
+        let notifDebounceTimer
+        let pollInterval
+
+        const triggerReload = () => {
+            clearTimeout(debounceTimer)
+            debounceTimer = setTimeout(() => loadUserData(currentUser.id), 300)
+        }
+
+        const triggerFriendReload = () => {
+            clearTimeout(friendDebounceTimer)
+            friendDebounceTimer = setTimeout(() => loadFriendData(currentUser.id), 300)
+        }
+
+        const triggerNotifReload = () => {
+            clearTimeout(notifDebounceTimer)
+            notifDebounceTimer = setTimeout(() => loadNotifications(currentUser.id), 300)
+        }
+
+        // Subscribe to realtime changes
+        const channel = supabase.channel(`spliter_sync_${currentUser.id}`)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_splits' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'settlements_tracker' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests' }, triggerFriendReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, triggerFriendReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, triggerNotifReload)
+            .subscribe((status, err) => {
+                if (status === 'SUBSCRIBED') {
+                    console.log('Realtime connected ✅')
+                    clearInterval(pollInterval)
+                }
+                if (status === 'CHANNEL_ERROR') {
+                    console.warn('Realtime error, falling back to polling:', err)
+                    if (!pollInterval) {
+                        pollInterval = setInterval(() => {
+                            loadUserData(currentUser.id)
+                            loadFriendData(currentUser.id)
+                            loadNotifications(currentUser.id)
+                        }, 30000)
+                    }
+                }
+                if (status === 'TIMED_OUT') {
+                    console.warn('Realtime timed out, retrying...')
+                }
+            })
+
+        pollInterval = setInterval(() => {
+            loadUserData(currentUser.id)
+            loadFriendData(currentUser.id)
+            loadNotifications(currentUser.id)
+        }, 30000)
+
+        return () => {
+            supabase.removeChannel(channel)
+            clearTimeout(debounceTimer)
+            clearTimeout(friendDebounceTimer)
+            clearTimeout(notifDebounceTimer)
+            clearInterval(pollInterval)
+        }
+    }, [currentUser, loadUserData, loadFriendData, loadNotifications])
 
     /* ══════════════════════════════════════════
        CHAT SYSTEM (JSON blob storage)
