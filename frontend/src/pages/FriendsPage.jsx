@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useApp } from '../context/AppContext'
 import { getAvatarColor, getInitials } from '../utils/helpers'
-import { UserPlus, Check, X, Loader2, Search, MessageCircle } from 'lucide-react'
+import { UserPlus, Check, X, Loader2, Search, MessageCircle, ChevronRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 
@@ -237,7 +237,7 @@ export default function FriendsPage() {
                                         initial={{ opacity: 0, y: 10 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{ delay: i * 0.05 }}
-                                        onClick={() => navigate(`/chat?friendship=${friendship.id}`)}
+                                        onClick={() => navigate(`/friends/${friendUser.id}`)}
                                     >
                                         <div className="flex items-center gap-3">
                                             <div className="avatar text-white text-xs shrink-0"
@@ -253,7 +253,7 @@ export default function FriendsPage() {
                                                     className="w-8 h-8 rounded-xl flex items-center justify-center"
                                                     style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)' }}
                                                 >
-                                                    <MessageCircle size={14} className="text-blue-400" />
+                                                    <ChevronRight size={14} className="text-blue-400" />
                                                 </div>
                                             </div>
                                         </div>
