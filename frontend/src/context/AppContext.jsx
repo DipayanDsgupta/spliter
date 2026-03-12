@@ -137,7 +137,9 @@ export function AppProvider({ children }) {
             const { data } = await fetchUserProfile(authUser.id)
 
             if (data?.full_name && data?.upi_id) {
-                setCurrentUser({ id: authUser.id, email: authUser.email || '', ...data })
+                const userObj = { id: authUser.id, email: authUser.email || '', ...data }
+                setCurrentUser(userObj)
+                localStorage.setItem('spliter_user_cache', JSON.stringify(userObj))
                 setNeedsProfile(false)
                 setIsLoading(false) // ← Show page IMMEDIATELY — data loads in background
 
@@ -159,8 +161,28 @@ export function AppProvider({ children }) {
             }
         } catch (e) {
             console.error('Session init error:', e)
+
+            // Critical Fix: If network is stuck or fetch fails on refresh, 
+            // fallback to cache instead of leaving currentUser as null (which kicks them out).
+            const cached = localStorage.getItem('spliter_user_cache')
+            if (cached) {
+                const parsed = JSON.parse(cached)
+                // Need to ensure the cached user matches the auth user ID to prevent account bleed
+                if (parsed.id === authUser.id) {
+                    setCurrentUser(parsed)
+                    setNeedsProfile(false)
+                }
+            } else {
+                setCurrentUser({
+                    id: authUser.id,
+                    email: authUser.email || authUser.user_metadata?.email || '',
+                    full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || 'User',
+                })
+            }
+
             setIsLoading(false)
             sessionHandled.current = false // allow retry on error
+            loadUserData(authUser.id) // Try to load their groups anyway in background
         }
     }, [loadUserData])
 
@@ -207,6 +229,7 @@ export function AppProvider({ children }) {
             }
             if (event === 'SIGNED_OUT') {
                 sessionHandled.current = false
+                localStorage.removeItem('spliter_user_cache')
                 setCurrentUser(null)
                 setNeedsProfile(false)
                 setIsLoading(false)
