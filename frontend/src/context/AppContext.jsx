@@ -35,26 +35,37 @@ export function AppProvider({ children }) {
                 .select('group_id, groups(id, name, emoji, created_at, created_by)')
                 .eq('user_id', userId)
 
-            if (!memberRows?.length) {
-                const prev = prevGroupsRef.current
-                if (prev.length > 0) {
-                    prev.forEach(g => toast.error(`You were removed from group "${g.name}" 🚫`, { duration: 5000 }))
-                    prevGroupsRef.current = []
-                    setGroups([])
-                    setExpenses([])
-                }
-                return
+            const groupIds = memberRows ? memberRows.map(r => r.group_id) : []
+            const loadedGroups = memberRows ? memberRows.map(r => ({ ...r.groups, members: [] })) : []
+
+            // Handle removed groups notification
+            const prev = prevGroupsRef.current
+            if (prev.length > 0) {
+                const currentIds = loadedGroups.map(g => g.id)
+                const lostGroups = prev.filter(g => !currentIds.includes(g.id))
+                lostGroups.forEach(g => {
+                    toast.error(`You were removed from group "${g.name}" or it was deleted 🚫`, { duration: 5000 })
+                })
             }
 
-            const groupIds = memberRows.map(r => r.group_id)
-            const loadedGroups = memberRows.map(r => ({ ...r.groups, members: [] }))
-
             // Step 2: fetch all-group-members + expenses + pending settlements IN PARALLEL
-            const [membersRes, expensesRes, settlementsRes] = await Promise.all([
-                supabase.from('group_members').select('group_id, user_id').in('group_id', groupIds),
-                supabase.from('expenses').select('*, expense_splits(*)').in('group_id', groupIds).order('created_at', { ascending: false }),
+            // We use .or to fetch expenses for our groups OR individual expenses (group_id.is.null)
+            const expenseQueryOr = groupIds.length > 0 
+                ? `group_id.in.(${groupIds.map(id => `"${id}"`).join(',')}),group_id.is.null` 
+                : `group_id.is.null`
+
+            const promises = [
+                supabase.from('expenses').select('*, expense_splits(*)').or(expenseQueryOr).order('created_at', { ascending: false }),
                 supabase.from('settlements_tracker').select('*').or(`payer_id.eq.${userId},receiver_id.eq.${userId}`).order('created_at', { ascending: false })
-            ])
+            ]
+
+            if (groupIds.length > 0) {
+                promises.push(supabase.from('group_members').select('group_id, user_id').in('group_id', groupIds))
+            } else {
+                promises.push(Promise.resolve({ data: [] })) // Dummy resolved for membersRes
+            }
+
+            const [expensesRes, settlementsRes, membersRes] = await Promise.all(promises)
 
             // Populate members per group & extract unique user IDs
             const uniqueUserIds = new Set()
@@ -67,7 +78,6 @@ export function AppProvider({ children }) {
             }
 
             // --- Real-time difference detection for Notifications ---
-            const prev = prevGroupsRef.current
             if (prev.length > 0) {
                 const currentIds = loadedGroups.map(g => g.id)
                 // 1. Did we lose any groups?
@@ -97,7 +107,7 @@ export function AppProvider({ children }) {
             }
 
             // Map expenses
-            if (expensesRes.data?.length) {
+            if (expensesRes.data) {
                 setExpenses(expensesRes.data.map(e => ({
                     ...e,
                     paid_by: e.expense_splits?.filter(s => s.amount_paid > 0)
@@ -106,10 +116,12 @@ export function AppProvider({ children }) {
                         user_id: s.user_id, amount_owed: s.amount_owed,
                     })) || [],
                 })))
+            } else {
+                setExpenses([])
+            }
 
-                if (settlementsRes?.data) {
-                    setPendingSettlements(settlementsRes.data)
-                }
+            if (settlementsRes?.data) {
+                setPendingSettlements(settlementsRes.data)
             }
         } catch (err) {
             console.warn('Data load error:', err)

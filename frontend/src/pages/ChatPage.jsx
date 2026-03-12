@@ -59,6 +59,26 @@ export default function ChatPage() {
             bannerAmount < -0.01 ? `You owe ${formatAmount(-bannerAmount)}` :
                 'All settled up ✅'
         expenseLink = `/groups/${groupId}`
+    } else if (friendship && friendUser) {
+        // Find individual expenses involving both users
+        const friendExpenses = expenses.filter(e => 
+            !e.group_id && 
+            e.expense_splits?.some(s => s.user_id === currentUser?.id) &&
+            e.expense_splits?.some(s => s.user_id === friendUser?.id)
+        )
+        // Find individual settlements between the two users
+        const friendSettlements = completedSettlements.filter(s => 
+            !s.group_id && 
+            ((s.payer_id === currentUser?.id && s.receiver_id === friendUser?.id) || 
+             (s.payer_id === friendUser?.id && s.receiver_id === currentUser?.id))
+        )
+        const balances = calculateNetBalances(friendExpenses, friendSettlements)
+        bannerAmount = balances[currentUser?.id] || 0
+        bannerPositive = bannerAmount >= 0
+        bannerText = bannerAmount > 0.01 ? `You're owed ${formatAmount(bannerAmount)}` :
+            bannerAmount < -0.01 ? `You owe ${formatAmount(-bannerAmount)}` :
+                'All settled up ✅'
+        expenseLink = `/friends/${friendUser.id}` // friend detail page
     }
 
     // Load messages on mount + realtime subscription

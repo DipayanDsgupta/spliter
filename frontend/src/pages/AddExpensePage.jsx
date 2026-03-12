@@ -17,13 +17,18 @@ export default function AddExpensePage() {
     const [searchParams] = useSearchParams()
     const { addExpense, groups, friends, currentUser } = useApp()
 
-    const preselectedGroup = searchParams.get('group') || ''
+    // Determine initial target (group or friend)
+    const initialTarget = () => {
+        const g = searchParams.get('group'); if (g) return `group_${g}`
+        const f = searchParams.get('friend'); if (f) return `friend_${f}`
+        return ''
+    }
 
     const [title, setTitle] = useState('')
     const [amount, setAmount] = useState('')
     const [category, setCategory] = useState('food')
     const [note, setNote] = useState('')
-    const [groupId, setGroupId] = useState(preselectedGroup)
+    const [target, setTarget] = useState(initialTarget()) // e.g. 'group_abc' or 'friend_xyz'
     const [splitMethod, setSplitMethod] = useState('equal')
     const [participants, setParticipants] = useState([])
     const [payers, setPayers] = useState([])
@@ -33,20 +38,35 @@ export default function AddExpensePage() {
     const [step, setStep] = useState(1) // 1: basic, 2: split
     const [loading, setLoading] = useState(false)
 
-    const selectedGroup = groups.find(g => g.id === groupId)
-    const allPeople = [currentUser, ...friends]
-    const groupMembers = selectedGroup
-        ? allPeople.filter(p => selectedGroup.members.includes(p.id))
-        : allPeople
+    // Compute contextual members based on target
+    const isGroupTarget = target.startsWith('group_')
+    const isFriendTarget = target.startsWith('friend_')
+    const actualTargetId = target.replace('group_', '').replace('friend_', '')
 
-    // Initialize participants & payers when group changes
+    const selectedGroup = isGroupTarget ? groups.find(g => g.id === actualTargetId) : null
+    const selectedFriend = isFriendTarget ? friends.find(f => f.id === actualTargetId) : null
+
+    const allPeople = [currentUser, ...friends]
+    
+    let groupMembers = allPeople
+    if (isGroupTarget && selectedGroup) {
+        groupMembers = allPeople.filter(p => selectedGroup.members.includes(p.id))
+    } else if (isFriendTarget && selectedFriend) {
+        groupMembers = [currentUser, selectedFriend]
+    }
+
+    // Initialize participants & payers when target changes
     useEffect(() => {
-        if (selectedGroup) {
+        if (isGroupTarget && selectedGroup) {
             setParticipants(selectedGroup.members)
             setPayers([currentUser.id])
             setPayerAmounts({ [currentUser.id]: '' })
+        } else if (isFriendTarget && selectedFriend) {
+            setParticipants([currentUser.id, selectedFriend.id])
+            setPayers([currentUser.id])
+            setPayerAmounts({ [currentUser.id]: '' })
         }
-    }, [groupId])
+    }, [target])
 
     const toggleParticipant = (pid) => {
         setParticipants(prev =>
@@ -106,7 +126,7 @@ export default function AddExpensePage() {
         }))
     }
 
-    const canProceed = title.trim() && parseFloat(amount) > 0 && groupId
+    const canProceed = title.trim() && parseFloat(amount) > 0 && target
 
     const canSubmit = () => {
         if (!canProceed) return false
@@ -122,7 +142,7 @@ export default function AddExpensePage() {
         setLoading(true)
         try {
             await addExpense({
-                group_id: groupId,
+                group_id: isGroupTarget ? actualTargetId : null,
                 title: title.trim(),
                 amount: parseFloat(amount),
                 category,
@@ -132,7 +152,15 @@ export default function AddExpensePage() {
             })
             setLoading(false)
             toast.success('Expense added! 🎉')
-            navigate(groupId ? `/groups/${groupId}` : '/')
+            
+            if (isGroupTarget) {
+                navigate(`/groups/${actualTargetId}`)
+            } else if (isFriendTarget) {
+                // Navigate to friend chat / detail page
+                navigate(`/chat?friendship=${actualTargetId}`)
+            } else {
+                navigate('/')
+            }
         } catch (e) {
             setLoading(false)
             toast.error(e.message || 'Failed to add expense')
@@ -208,18 +236,29 @@ export default function AddExpensePage() {
                                 className="input-field"
                             />
 
-                            {/* Group */}
+                            {/* Target (Group or Friend) */}
                             <div className="relative">
                                 <select
-                                    value={groupId}
-                                    onChange={e => setGroupId(e.target.value)}
+                                    value={target}
+                                    onChange={e => setTarget(e.target.value)}
                                     className="input-field appearance-none cursor-pointer"
                                     style={{ paddingRight: '36px' }}
                                 >
-                                    <option value="">Select Group</option>
-                                    {groups.map(g => (
-                                        <option key={g.id} value={g.id}>{g.emoji} {g.name}</option>
-                                    ))}
+                                    <option value="">Select Group or Friend</option>
+                                    {groups.length > 0 && (
+                                        <optgroup label="Groups">
+                                            {groups.map(g => (
+                                                <option key={`g-${g.id}`} value={`group_${g.id}`}>{g.emoji} {g.name}</option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    {friends.length > 0 && (
+                                        <optgroup label="Friends">
+                                            {friends.map(f => (
+                                                <option key={`f-${f.id}`} value={`friend_${f.id}`}>👤 {f.full_name}</option>
+                                            ))}
+                                        </optgroup>
+                                    )}
                                 </select>
                                 <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-[#94A3B8] pointer-events-none" />
                             </div>
@@ -279,7 +318,9 @@ export default function AddExpensePage() {
                                 <span className="text-2xl">{CATEGORIES.find(c => c.id === category)?.emoji}</span>
                                 <div className="flex-1">
                                     <p className="font-bold text-white">{title}</p>
-                                    <p className="text-[#94A3B8] text-sm">{selectedGroup?.emoji} {selectedGroup?.name}</p>
+                                    <p className="text-[#94A3B8] text-sm">
+                                        {isGroupTarget ? `${selectedGroup?.emoji} ${selectedGroup?.name}` : `👤 ${selectedFriend?.full_name}`}
+                                    </p>
                                 </div>
                                 <p className="text-xl font-extrabold gradient-text">₹{amount}</p>
                             </div>
