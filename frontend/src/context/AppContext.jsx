@@ -18,6 +18,7 @@ export function AppProvider({ children }) {
     const [groups, setGroups] = useState(SUPABASE_CONFIGURED ? [] : MOCK_GROUPS)
     const [expenses, setExpenses] = useState(SUPABASE_CONFIGURED ? [] : MOCK_EXPENSES)
     const [settlements, setSettlements] = useState(SUPABASE_CONFIGURED ? [] : MOCK_SETTLEMENTS)
+    const [pendingSettlements, setPendingSettlements] = useState([]) // From settlements_tracker
     const prevGroupsRef = useRef([])
 
     /* ── Load groups + expenses in PARALLEL (fast!) ── */
@@ -44,10 +45,11 @@ export function AppProvider({ children }) {
             const groupIds = memberRows.map(r => r.group_id)
             const loadedGroups = memberRows.map(r => ({ ...r.groups, members: [] }))
 
-            // Step 2: fetch all-group-members + expenses IN PARALLEL
-            const [membersRes, expensesRes] = await Promise.all([
+            // Step 2: fetch all-group-members + expenses + pending settlements IN PARALLEL
+            const [membersRes, expensesRes, settlementsRes] = await Promise.all([
                 supabase.from('group_members').select('group_id, user_id').in('group_id', groupIds),
                 supabase.from('expenses').select('*, expense_splits(*)').in('group_id', groupIds).order('created_at', { ascending: false }),
+                supabase.from('settlements_tracker').select('*').or(`payer_id.eq.${userId},receiver_id.eq.${userId}`).order('created_at', { ascending: false })
             ])
 
             // Populate members per group & extract unique user IDs
@@ -100,6 +102,10 @@ export function AppProvider({ children }) {
                         user_id: s.user_id, amount_owed: s.amount_owed,
                     })) || [],
                 })))
+
+                if (settlementsRes?.data) {
+                    setPendingSettlements(settlementsRes.data)
+                }
             }
         } catch (err) {
             console.warn('Data load error:', err)
@@ -261,6 +267,7 @@ export function AppProvider({ children }) {
             .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_splits' }, triggerReload)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'settlements_tracker' }, triggerReload)
             .subscribe((status, err) => {
                 if (status === 'SUBSCRIBED') {
                     console.log('Realtime connected ✅')
@@ -456,10 +463,26 @@ export function AppProvider({ children }) {
 
     const deleteExpense = async (expenseId) => {
         if (!SUPABASE_CONFIGURED) return
-        try {
-            await supabase.from('expenses').delete().eq('id', expenseId)
-            setExpenses(prev => prev.filter(e => e.id !== expenseId))
-        } catch (e) { console.error('deleteExpense error:', e) }
+        const { error } = await supabase.from('expenses').delete().eq('id', expenseId)
+        if (error) throw error
+        setExpenses(prev => prev.filter(e => e.id !== expenseId))
+    }
+
+    /* ── EXPERIMENTAL: createPendingSettlement ── */
+    const createPendingSettlement = async ({ settlementId, groupId, payerId, receiverId, amount }) => {
+        if (!SUPABASE_CONFIGURED) return null
+        const { data, error } = await supabase.from('settlements_tracker').insert([{
+            settlement_id: settlementId,
+            group_id: groupId || null,
+            payer_id: payerId,
+            receiver_id: receiverId,
+            amount: amount,
+            status: 'pending'
+        }]).select().single()
+
+        if (error) throw error
+        setPendingSettlements(prev => [data, ...prev])
+        return data
     }
 
     const getUserById = id => id === currentUser?.id ? currentUser : friends.find(f => f.id === id) || null
@@ -475,6 +498,7 @@ export function AppProvider({ children }) {
         groups, addGroup, joinGroup, removeMember, deleteGroup,
         expenses, addExpense, deleteExpense,
         settlements, markSettled,
+        pendingSettlements, createPendingSettlement,
         getUserById, getGroupById, getExpensesByGroup,
     }
 

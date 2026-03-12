@@ -64,6 +64,18 @@ export function calculateNetBalances(expenses) {
 }
 
 /**
+ * Generate a random 10-character alphanumeric settlement ID
+ */
+export function generateSettlementId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    let text = ''
+    for (let i = 0; i < 10; i++) {
+        text += chars.charAt(Math.floor(Math.random() * chars.length))
+    }
+    return text
+}
+
+/**
  * Generate Google Pay UPI deep link
  */
 export function generateGooglePayLink({ upiId, name, amount, note }) {

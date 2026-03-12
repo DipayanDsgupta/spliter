@@ -1,12 +1,12 @@
 import { motion } from 'framer-motion'
 import { useApp } from '../context/AppContext'
-import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, generateGooglePayLink } from '../utils/helpers'
-import { CheckCircle, TrendingDown } from 'lucide-react'
+import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, generateGooglePayLink, generateSettlementId } from '../utils/helpers'
+import { CheckCircle, TrendingDown, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 
 export default function BalancesPage() {
-    const { expenses, groups, getUserById, currentUser } = useApp()
-    const [paid, setPaid] = useState({})
+    const { expenses, groups, getUserById, currentUser, pendingSettlements, createPendingSettlement } = useApp()
+    const [loadingPayment, setLoadingPayment] = useState(null)
 
     // Global balances across ALL groups
     const allBalances = calculateNetBalances(expenses)
@@ -52,6 +52,49 @@ export default function BalancesPage() {
                             const isMyPayment = t.from === currentUser?.id
                             const key = `${group.id}-${i}`
 
+                            // Find if there's an ongoing or completed settlement for this exact debt
+                            const activeSettlement = pendingSettlements.find(s =>
+                                s.group_id === group.id &&
+                                s.payer_id === t.from &&
+                                s.receiver_id === t.to &&
+                                Math.abs(Number(s.amount) - t.amount) < 0.01 // Floating point safe match
+                            )
+
+                            const isPending = activeSettlement?.status === 'pending'
+                            const isCompleted = activeSettlement?.status === 'completed'
+
+                            const handlePay = async () => {
+                                if (!toUser?.upi_id) {
+                                    alert(`${toUser?.full_name || 'User'} has not added a UPI ID.`)
+                                    return
+                                }
+                                setLoadingPayment(key)
+                                try {
+                                    const settlementId = generateSettlementId()
+                                    // 1. Create the pending tracker in the DB
+                                    await createPendingSettlement({
+                                        settlementId,
+                                        groupId: group.id,
+                                        payerId: currentUser.id,
+                                        receiverId: toUser.id,
+                                        amount: t.amount
+                                    })
+                                    // 2. Open Google Pay/UPI Intent
+                                    const link = generateGooglePayLink({
+                                        upiId: toUser.upi_id,
+                                        name: toUser.full_name,
+                                        amount: t.amount,
+                                        note: settlementId, // CRITICAL: Pass the ID into the payment note!
+                                    })
+                                    window.location.href = link
+                                } catch (e) {
+                                    console.error("Payment init failed:", e)
+                                    alert("Failed to initialize payment. Try again.")
+                                } finally {
+                                    setLoadingPayment(null)
+                                }
+                            }
+
                             return (
                                 <div key={i} className="flex items-center gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
                                     <div className="flex-1">
@@ -64,35 +107,37 @@ export default function BalancesPage() {
                                         <p className="text-xs text-[#94A3B8] mt-0.5">{formatAmount(t.amount)}</p>
                                     </div>
 
-                                    {isMyPayment && !paid[key] && (
-                                        <motion.a
-                                            href={generateGooglePayLink({
-                                                upiId: toUser?.upi_id,
-                                                name: toUser?.full_name,
-                                                amount: t.amount,
-                                                note: `${group.name} Settlement`,
-                                            })}
-                                            className="pay-btn"
-                                            style={{ textDecoration: 'none' }}
-                                            onClick={() => setTimeout(() => {
-                                                if (window.confirm(`Mark ${formatAmount(t.amount)} to ${toUser?.full_name} as paid?`)) {
-                                                    setPaid(prev => ({ ...prev, [key]: true }))
-                                                }
-                                            }, 500)}
+                                    {isMyPayment && !isPending && !isCompleted && (
+                                        <motion.button
+                                            onClick={handlePay}
+                                            disabled={loadingPayment === key}
+                                            className="pay-btn flex items-center gap-2"
                                             whileTap={{ scale: 0.97 }}
                                         >
-                                            💸 Pay
-                                        </motion.a>
+                                            {loadingPayment === key ? <Loader2 size={14} className="animate-spin" /> : '💸 Pay'}
+                                        </motion.button>
                                     )}
 
-                                    {paid[key] && (
+                                    {isMyPayment && isPending && (
+                                        <span className="text-xs font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
+                                            <Loader2 size={12} className="animate-spin" /> Verifying...
+                                        </span>
+                                    )}
+
+                                    {isCompleted && (
                                         <span className="text-xs font-semibold text-green-400 flex items-center gap-1">
                                             <CheckCircle size={12} /> Paid
                                         </span>
                                     )}
 
-                                    {!isMyPayment && (
-                                        <span className="text-xs font-semibold text-[#94A3B8] bg-white/05 px-2 py-1 rounded-full">
+                                    {!isMyPayment && isPending && (
+                                        <span className="text-xs font-semibold text-[#F59E0B] bg-[#F59E0B]/10 border border-[#F59E0B]/20 px-2 py-1.5 rounded-xl flex items-center gap-1">
+                                            <Loader2 size={12} className="animate-spin" /> Paying...
+                                        </span>
+                                    )}
+
+                                    {!isMyPayment && !isPending && !isCompleted && (
+                                        <span className="text-xs font-semibold text-[#94A3B8] bg-white/05 border border-white/05 px-2 py-1.5 rounded-xl">
                                             Awaiting
                                         </span>
                                     )}
