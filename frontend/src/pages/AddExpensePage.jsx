@@ -168,7 +168,7 @@ export default function AddExpensePage() {
 
     return (
         <div className="min-h-dvh animated-bg">
-            <div className="px-5 pt-10 pb-20">
+            <div className="px-5 pt-10 pb-32 safe-bottom">
                 {/* Header */}
                 <div className="flex items-center gap-4 mb-7">
                     <motion.button

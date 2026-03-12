@@ -102,7 +102,7 @@ function CreateGroupModal({ onClose }) {
             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={step === 'share' ? goToGroup : onClose} />
 
             <motion.div className="relative w-full max-w-lg z-10 rounded-t-3xl sm:rounded-3xl flex flex-col"
-                style={{ background: '#141428', border: '1px solid rgba(255,255,255,0.10)', maxHeight: '90dvh' }}
+                style={{ background: '#141428', border: '1px solid rgba(255,255,255,0.10)', maxHeight: '85dvh' }}
                 initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
                 transition={{ type: 'spring', damping: 28, stiffness: 320 }}>
 
@@ -306,8 +306,8 @@ function CreateGroupModal({ onClose }) {
                             </div>
 
                             {/* Sticky Create button */}
-                            <div className="px-6 py-4 shrink-0"
-                                style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: '#141428' }}>
+                            <div className="px-6 py-4 shrink-0 mt-auto"
+                                style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: '#141428', paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}>
                                 {(selected.length + inviteList.length) > 0 && (
                                     <p className="text-xs text-center mb-2" style={{ color: '#64748B' }}>
                                         Group: you + {selected.length} friend{selected.length !== 1 ? 's' : ''}

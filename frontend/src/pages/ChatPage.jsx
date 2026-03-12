@@ -177,7 +177,7 @@ export default function ChatPage() {
     }
 
     return (
-        <div className="page" style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: '#0B0B1A' }}>
+        <div className="flex flex-col h-dvh bg-[#0B0B1A]">
             {/* ─── Header ─── */}
             <div className="px-4 pt-10 pb-3 shrink-0" style={{ background: 'rgba(13,13,26,0.95)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                 <div className="flex items-center gap-3">
