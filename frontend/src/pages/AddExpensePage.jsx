@@ -156,8 +156,7 @@ export default function AddExpensePage() {
             if (isGroupTarget) {
                 navigate(`/groups/${actualTargetId}`)
             } else if (isFriendTarget) {
-                // Navigate to friend chat / detail page
-                navigate(`/chat?friendship=${actualTargetId}`)
+                navigate(`/friends/${actualTargetId}`)
             } else {
                 navigate('/')
             }

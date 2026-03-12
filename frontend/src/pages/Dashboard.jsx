@@ -369,53 +369,7 @@ export default function Dashboard() {
                     )}
                 </div>
 
-                {/* Friends */}
-                <div className="mb-8">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold text-white">Your Friends</h2>
-                        <button
-                            className="text-purple-400 text-sm font-semibold flex items-center gap-1"
-                            onClick={() => navigate('/friends')}
-                        >
-                            See all <ArrowUpRight size={14} />
-                        </button>
-                    </div>
-                    {friendships.length === 0 ? (
-                        <motion.div
-                            className="text-center py-10 rounded-3xl cursor-pointer"
-                            style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}
-                            onClick={() => navigate('/friends')}
-                            whileTap={{ scale: 0.98 }}
-                            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                        >
-                            <div className="text-4xl mb-3">👋</div>
-                            <p className="text-white font-semibold text-sm mb-1">No friends yet</p>
-                            <p className="text-[#475569] text-xs mb-4">Add a friend to split expenses directly</p>
-                            <span className="text-xs font-bold px-4 py-2 rounded-full"
-                                style={{ background: 'rgba(124,58,237,0.15)', color: '#9D5FF3', border: '1px solid rgba(124,58,237,0.3)' }}>
-                                + Add Friend
-                            </span>
-                        </motion.div>
-                    ) : (
-                        <div className="space-y-3">
-                            {friendships.slice(0, 3).map((friendship, i) => {
-                                const friendId = getFriendIdFromFriendship(friendship)
-                                const friendUser = getUserById(friendId)
-                                if (!friendUser) return null;
-                                return (
-                                    <motion.div
-                                        key={friendship.id}
-                                        initial={{ opacity: 0, y: 16 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        transition={{ delay: i * 0.08 }}
-                                    >
-                                        <FriendCard friendUser={friendUser} onClick={() => navigate(`/friends/${friendUser.id}`)} />
-                                    </motion.div>
-                                )
-                            })}
-                        </div>
-                    )}
-                </div>
+
 
                 {/* Recent activity */}
                 <div>

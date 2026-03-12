@@ -336,22 +336,22 @@ export function AppProvider({ children }) {
         const { paid_by, splits, ...insertData } = expense
         const e = { ...insertData, id, created_at: new Date().toISOString() }
 
+        // Build the expense_splits rows locally for both db and optimistic update
+        const splitRows = []
+        const combinedUserIds = [...new Set([...paid_by.map(p => p.user_id), ...splits.map(s => s.user_id)])]
+
+        for (const uid of combinedUserIds) {
+            const paid = paid_by.find(p => p.user_id === uid)?.amount_paid || 0
+            const owed = splits.find(s => s.user_id === uid)?.amount_owed || 0
+            if (paid > 0 || owed > 0) {
+                splitRows.push({ expense_id: id, user_id: uid, amount_paid: paid, amount_owed: owed })
+            }
+        }
+
         if (SUPABASE_CONFIGURED && currentUser) {
             e.created_by = currentUser.id
             const { data, error } = await supabase.from('expenses').insert(e).select().single()
             if (error) throw new Error(error.message || "Failed to save expense base")
-
-            // Build the expense_splits rows
-            const splitRows = []
-            const combinedUserIds = [...new Set([...paid_by.map(p => p.user_id), ...splits.map(s => s.user_id)])]
-
-            for (const uid of combinedUserIds) {
-                const paid = paid_by.find(p => p.user_id === uid)?.amount_paid || 0
-                const owed = splits.find(s => s.user_id === uid)?.amount_owed || 0
-                if (paid > 0 || owed > 0) {
-                    splitRows.push({ expense_id: id, user_id: uid, amount_paid: paid, amount_owed: owed })
-                }
-            }
 
             const { error: splitErr } = await supabase.from('expense_splits').insert(splitRows)
             if (splitErr) {
@@ -360,12 +360,12 @@ export function AppProvider({ children }) {
                 throw new Error("Failed to save expense splits")
             }
 
-            const fullObj = { ...(data || e), paid_by, splits }
+            const fullObj = { ...(data || e), paid_by, splits, expense_splits: splitRows }
             setExpenses(prev => [fullObj, ...prev])
             return fullObj
         }
 
-        const fullObj = { ...e, paid_by, splits }
+        const fullObj = { ...e, paid_by, splits, expense_splits: splitRows }
         setExpenses(prev => [fullObj, ...prev])
         return fullObj
     }
