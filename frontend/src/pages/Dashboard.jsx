@@ -132,15 +132,6 @@ export default function Dashboard() {
 
     const firstName = currentUser?.full_name?.split(' ')[0] || 'there'
 
-    const container = {
-        hidden: { opacity: 0 },
-        show: { opacity: 1, transition: { staggerChildren: 0.08 } }
-    }
-    const item = {
-        hidden: { opacity: 0, y: 16 },
-        show: { opacity: 1, y: 0 }
-    }
-
     return (
         <div className="page animated-bg">
             {/* Header */}
@@ -254,13 +245,18 @@ export default function Dashboard() {
                             </span>
                         </motion.div>
                     ) : (
-                        <motion.div className="space-y-3" variants={container} initial="hidden" animate="show">
-                            {groups.slice(0, 3).map(group => (
-                                <motion.div key={group.id} variants={item}>
+                        <div className="space-y-3">
+                            {groups.slice(0, 3).map((group, i) => (
+                                <motion.div
+                                    key={group.id}
+                                    initial={{ opacity: 0, y: 16 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: i * 0.08 }}
+                                >
                                     <GroupCard group={group} onClick={() => navigate(`/groups/${group.id}`)} />
                                 </motion.div>
                             ))}
-                        </motion.div>
+                        </div>
                     )}
                 </div>
 
