@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Plus, TrendingUp, Users, ArrowUpRight, ArrowDownLeft, Wallet } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, CATEGORIES } from '../utils/helpers'
+import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, formatTime, CATEGORIES } from '../utils/helpers'
 
 function StatCard({ label, amount, positive, icon: Icon }) {
     return (
@@ -130,8 +130,15 @@ function FriendCard({ friendUser, onClick }) {
 }
 
 function RecentActivity() {
-    const { expenses, getUserById } = useApp()
-    const recent = [...expenses].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5)
+    const { expenses, getUserById, currentUser } = useApp()
+    
+    // Only show expenses that the current user is a part of
+    const userExpenses = expenses.filter(e => 
+        e.paid_by?.some(p => p.user_id === currentUser?.id) || 
+        e.expense_splits?.some(s => s.user_id === currentUser?.id)
+    )
+
+    const recent = [...userExpenses].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5)
 
     if (recent.length === 0) return (
         <motion.div
@@ -171,7 +178,7 @@ function RecentActivity() {
                         </div>
                         <div className="text-right shrink-0">
                             <p className="font-bold text-white text-sm">{formatAmount(exp.amount)}</p>
-                            <p className="text-[10px] text-[#94A3B8] mt-0.5">{exp.splits.length} people</p>
+                            <p className="text-[10px] text-[#94A3B8] font-medium mt-0.5">{formatTime(exp.created_at)}</p>
                         </div>
                     </motion.div>
                 )

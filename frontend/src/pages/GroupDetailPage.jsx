@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp, Copy, Trash2, CheckCircle, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useApp } from '../context/AppContext'
-import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, CATEGORIES } from '../utils/helpers'
+import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, formatTime, CATEGORIES } from '../utils/helpers'
 
 function MemberBalance({ userId, net, group }) {
     const { getUserById, currentUser, removeMember } = useApp()
@@ -305,7 +305,7 @@ export default function GroupDetailPage() {
                                         <div className="flex-1 min-w-0">
                                             <p className="font-bold text-white text-sm">{exp.title}</p>
                                             <p className="text-xs text-[#94A3B8] mt-0.5">
-                                                Paid by {payers} · {formatDate(exp.created_at)}
+                                                Paid by {payers} · {formatDate(exp.created_at)} at {formatTime(exp.created_at)}
                                             </p>
                                             <p className="text-[10px] text-[#64748B] mt-0.5 leading-tight">
                                                 For: {splitAmong}

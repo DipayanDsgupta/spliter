@@ -1,10 +1,17 @@
 import { motion } from 'framer-motion'
 import { useApp } from '../context/AppContext'
-import { formatDate, CATEGORIES, formatAmount, getAvatarColor, getInitials } from '../utils/helpers'
+import { formatDate, formatTime, CATEGORIES, formatAmount, getAvatarColor, getInitials } from '../utils/helpers'
 
 export default function ActivityPage() {
-    const { expenses, getUserById } = useApp()
-    const sorted = [...expenses].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    const { expenses, getUserById, currentUser } = useApp()
+    
+    // Only show expenses that the current user is a part of (paid for or split)
+    const userExpenses = expenses.filter(e => 
+        e.paid_by?.some(p => p.user_id === currentUser?.id) || 
+        e.expense_splits?.some(s => s.user_id === currentUser?.id)
+    )
+
+    const sorted = [...userExpenses].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
 
     // Group by date
     const groups = {}
@@ -56,7 +63,10 @@ export default function ActivityPage() {
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-start justify-between gap-2">
                                                     <p className="font-bold text-white text-sm leading-tight">{exp.title}</p>
-                                                    <p className="font-extrabold text-white text-base shrink-0">{formatAmount(exp.amount)}</p>
+                                                    <div className="text-right shrink-0">
+                                                        <p className="font-extrabold text-white text-base">{formatAmount(exp.amount)}</p>
+                                                        <p className="text-[10px] text-[#94A3B8] font-medium mt-0.5">{formatTime(exp.created_at)}</p>
+                                                    </div>
                                                 </div>
                                                 <p className="text-xs text-[#94A3B8] mt-1">Paid by {payers}</p>
 

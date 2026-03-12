@@ -1,12 +1,13 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Home, Users, UserCheck, TrendingUp, User } from 'lucide-react'
+import { Home, Users, UserCheck, TrendingUp, User, Activity } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 
 const NAV_ITEMS = [
     { icon: Home, label: 'Home', path: '/' },
     { icon: Users, label: 'Groups', path: '/groups' },
     { icon: UserCheck, label: 'Friends', path: '/friends' },
+    { icon: Activity, label: 'Activity', path: '/activity' },
     { icon: TrendingUp, label: 'Settle', path: '/balances' },
     { icon: User, label: 'Profile', path: '/profile' },
 ]

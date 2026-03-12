@@ -146,13 +146,20 @@ export function getInitials(name) {
 export function formatDate(dateStr) {
     const date = new Date(dateStr)
     const now = new Date()
-    const diff = now - date
-    const days = Math.floor(diff / 86400000)
+    
+    const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+    const nowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const days = Math.round((nowStart - dateStart) / 86400000)
 
     if (days === 0) return 'Today'
     if (days === 1) return 'Yesterday'
     if (days < 7) return `${days} days ago`
-    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+export function formatTime(dateStr) {
+    const date = new Date(dateStr)
+    return date.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
 }
 
 export const CATEGORIES = [
