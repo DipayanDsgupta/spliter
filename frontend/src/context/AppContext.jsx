@@ -492,6 +492,32 @@ export function AppProvider({ children }) {
         setPendingSettlements(prev => prev.filter(s => s.id !== settlementId))
     }
 
+    /** Receiver approves a pending settlement (marks it completed) */
+    const approveSettlement = async (settlementDbId) => {
+        if (!SUPABASE_CONFIGURED) return
+        const { error } = await supabase
+            .from('settlements_tracker')
+            .update({
+                status: 'completed',
+                verified_at: new Date().toISOString()
+            })
+            .eq('id', settlementDbId)
+        if (error) throw error
+        setPendingSettlements(prev => prev.map(s =>
+            s.id === settlementDbId
+                ? { ...s, status: 'completed', verified_at: new Date().toISOString() }
+                : s
+        ))
+    }
+
+    /** Receiver rejects a pending settlement (deletes it so payer can retry) */
+    const rejectSettlement = async (settlementDbId) => {
+        if (!SUPABASE_CONFIGURED) return
+        const { error } = await supabase.from('settlements_tracker').delete().eq('id', settlementDbId)
+        if (error) throw error
+        setPendingSettlements(prev => prev.filter(s => s.id !== settlementDbId))
+    }
+
     const getUserById = id => id === currentUser?.id ? currentUser : friends.find(f => f.id === id) || null
     const getGroupById = id => groups.find(g => g.id === id) || null
     const getExpensesByGroup = gid => expenses.filter(e => e.group_id === gid)
@@ -505,7 +531,7 @@ export function AppProvider({ children }) {
         groups, addGroup, joinGroup, removeMember, deleteGroup,
         expenses, addExpense, deleteExpense,
         settlements, markSettled,
-        pendingSettlements, createPendingSettlement, cancelPendingSettlement,
+        pendingSettlements, createPendingSettlement, cancelPendingSettlement, approveSettlement, rejectSettlement,
         getUserById, getGroupById, getExpensesByGroup,
     }
 

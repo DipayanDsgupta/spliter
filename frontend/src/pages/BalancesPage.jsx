@@ -1,41 +1,21 @@
 import { motion } from 'framer-motion'
 import { useApp } from '../context/AppContext'
-import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, generateGooglePayLink, generateSettlementId } from '../utils/helpers'
-import { CheckCircle, TrendingDown, Loader2, UploadCloud, X } from 'lucide-react'
+import { calculateNetBalances, simplifyDebts, formatAmount, generateGooglePayLink, generateSettlementId } from '../utils/helpers'
+import { CheckCircle, TrendingDown, Loader2, X, Check, Clock } from 'lucide-react'
 import { useState } from 'react'
-import { supabase } from '../services/supabase'
 import toast from 'react-hot-toast'
 
 export default function BalancesPage() {
-    const { expenses, groups, getUserById, currentUser, pendingSettlements, createPendingSettlement, cancelPendingSettlement } = useApp()
+    const {
+        expenses, groups, getUserById, currentUser,
+        pendingSettlements, createPendingSettlement, cancelPendingSettlement,
+        approveSettlement, rejectSettlement
+    } = useApp()
+
     const [loadingPayment, setLoadingPayment] = useState(null)
     const [cancelingPayment, setCancelingPayment] = useState(null)
-
-    const handleUpload = async (e, settlementId) => {
-        const file = e.target.files?.[0]
-        if (!file) return
-
-        const reader = new FileReader()
-        reader.onload = async (event) => {
-            const base64Image = event.target.result.split(',')[1] // remove metadata string prefix
-
-            const toastId = toast.loading('Running AI OCR Verification...')
-            try {
-                const { data, error } = await supabase.functions.invoke('verify-receipt', {
-                    body: { base64Image, settlementId }
-                })
-
-                if (error) throw error
-                if (!data?.success) throw new Error(data?.error || 'Verification failed')
-
-                toast.success('Payment verified! Data updated.', { id: toastId })
-            } catch (err) {
-                console.error(err)
-                toast.error(`OCR Failed: ${err.message}`, { id: toastId })
-            }
-        }
-        reader.readAsDataURL(file)
-    }
+    const [approvingPayment, setApprovingPayment] = useState(null)
+    const [rejectingPayment, setRejectingPayment] = useState(null)
 
     // Global balances across ALL groups
     const allBalances = calculateNetBalances(expenses)
@@ -79,6 +59,7 @@ export default function BalancesPage() {
                             const fromUser = getUserById(t.from)
                             const toUser = getUserById(t.to)
                             const isMyPayment = t.from === currentUser?.id
+                            const isMyReceivable = t.to === currentUser?.id
                             const key = `${group.id}-${i}`
 
                             // Find if there's an ongoing or completed settlement for this exact debt
@@ -86,21 +67,21 @@ export default function BalancesPage() {
                                 s.group_id === group.id &&
                                 s.payer_id === t.from &&
                                 s.receiver_id === t.to &&
-                                Math.abs(Number(s.amount) - t.amount) < 0.01 // Floating point safe match
+                                (s.status === 'pending' || s.status === 'completed')
                             )
 
                             const isPending = activeSettlement?.status === 'pending'
                             const isCompleted = activeSettlement?.status === 'completed'
 
+                            // ─── PAYER: initiate payment ───
                             const handlePay = async () => {
                                 if (!toUser?.upi_id) {
-                                    alert(`${toUser?.full_name || 'User'} has not added a UPI ID.`)
+                                    toast.error(`${toUser?.full_name || 'User'} has not added a UPI ID.`)
                                     return
                                 }
                                 setLoadingPayment(key)
                                 try {
                                     const settlementId = generateSettlementId()
-                                    // 1. Create the pending tracker in the DB
                                     await createPendingSettlement({
                                         settlementId,
                                         groupId: group.id,
@@ -108,32 +89,61 @@ export default function BalancesPage() {
                                         receiverId: toUser.id,
                                         amount: t.amount
                                     })
-                                    // 2. Open Google Pay/UPI Intent
                                     const link = generateGooglePayLink({
                                         upiId: toUser.upi_id,
                                         name: toUser.full_name,
                                         amount: t.amount,
-                                        note: settlementId, // CRITICAL: Pass the ID into the payment note!
+                                        note: settlementId,
                                     })
                                     window.location.href = link
                                 } catch (e) {
                                     console.error("Payment init failed:", e)
-                                    alert("Failed to initialize payment. Try again.")
+                                    toast.error("Failed to initialize payment. Try again.")
                                 } finally {
                                     setLoadingPayment(null)
                                 }
                             }
 
+                            // ─── PAYER: cancel pending settlement ───
                             const handleCancel = async () => {
                                 if (!activeSettlement) return
                                 setCancelingPayment(activeSettlement.id)
                                 try {
                                     await cancelPendingSettlement(activeSettlement.id)
-                                    toast.success('Payment cancelled.')
+                                    toast.success('Payment request cancelled.')
                                 } catch (e) {
-                                    toast.error('Failed to cancel payment.')
+                                    toast.error('Failed to cancel.')
                                 } finally {
                                     setCancelingPayment(null)
+                                }
+                            }
+
+                            // ─── RECEIVER: approve payment ───
+                            const handleApprove = async () => {
+                                if (!activeSettlement) return
+                                setApprovingPayment(activeSettlement.id)
+                                try {
+                                    await approveSettlement(activeSettlement.id)
+                                    toast.success(`Payment of ${formatAmount(Number(activeSettlement.amount))} approved! ✅`)
+                                } catch (e) {
+                                    console.error("Approve failed:", e)
+                                    toast.error('Failed to approve payment.')
+                                } finally {
+                                    setApprovingPayment(null)
+                                }
+                            }
+
+                            // ─── RECEIVER: reject payment claim ───
+                            const handleReject = async () => {
+                                if (!activeSettlement) return
+                                setRejectingPayment(activeSettlement.id)
+                                try {
+                                    await rejectSettlement(activeSettlement.id)
+                                    toast('Payment claim rejected.', { icon: '❌' })
+                                } catch (e) {
+                                    toast.error('Failed to reject.')
+                                } finally {
+                                    setRejectingPayment(null)
                                 }
                             }
 
@@ -149,6 +159,9 @@ export default function BalancesPage() {
                                         <p className="text-xs text-[#94A3B8] mt-0.5">{formatAmount(t.amount)}</p>
                                     </div>
 
+                                    {/* ══════ PAYER's VIEW ══════ */}
+
+                                    {/* Pay button (no active settlement) */}
                                     {isMyPayment && !isPending && !isCompleted && (
                                         <motion.button
                                             onClick={handlePay}
@@ -160,50 +173,77 @@ export default function BalancesPage() {
                                         </motion.button>
                                     )}
 
+                                    {/* Payer: waiting for receiver's approval */}
                                     {isMyPayment && isPending && (
-                                        <div className="flex flex-col items-end gap-1.5 mt-1">
+                                        <div className="flex flex-col items-end gap-1.5">
                                             <div className="flex items-center gap-1.5">
-                                                <span className="text-xs font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
-                                                    <Loader2 size={12} className="animate-spin" /> Verifying...
+                                                <span className="text-[10px] font-semibold text-[#F59E0B] flex items-center gap-1 bg-[#F59E0B]/10 px-2 py-1.5 rounded-xl border border-[#F59E0B]/20">
+                                                    <Clock size={10} /> Awaiting {toUser?.full_name?.split(' ')[0]}'s approval
                                                 </span>
-                                                <motion.button
-                                                    onClick={handleCancel}
-                                                    disabled={cancelingPayment === activeSettlement.id}
-                                                    className="text-[10px] font-semibold text-red-400 cursor-pointer hover:bg-red-500/30 flex items-center gap-0.5 bg-red-500/15 px-2 py-1.5 rounded-xl border border-red-500/25 transition-colors"
-                                                    whileTap={{ scale: 0.92 }}
-                                                    title="Cancel this payment and retry"
-                                                >
-                                                    {cancelingPayment === activeSettlement.id
-                                                        ? <Loader2 size={10} className="animate-spin" />
-                                                        : <><X size={10} /> Cancel</>
-                                                    }
-                                                </motion.button>
                                             </div>
-                                            <label className="text-[10px] font-medium text-blue-400 cursor-pointer hover:bg-blue-500/20 flex items-center gap-1 bg-blue-500/10 px-2 py-1 rounded-md border border-blue-500/20 transition-colors">
-                                                <UploadCloud size={10} /> Upload Receipt
-                                                <input
-                                                    type="file"
-                                                    accept="image/*"
-                                                    className="hidden"
-                                                    onChange={(e) => handleUpload(e, activeSettlement.settlement_id)}
-                                                />
-                                            </label>
+                                            <motion.button
+                                                onClick={handleCancel}
+                                                disabled={cancelingPayment === activeSettlement.id}
+                                                className="text-[10px] font-semibold text-red-400 cursor-pointer hover:bg-red-500/30 flex items-center gap-0.5 bg-red-500/15 px-1.5 py-1 rounded-lg border border-red-500/25 transition-colors"
+                                                whileTap={{ scale: 0.92 }}
+                                                title="Cancel this payment request"
+                                            >
+                                                {cancelingPayment === activeSettlement.id
+                                                    ? <Loader2 size={10} className="animate-spin" />
+                                                    : <><X size={10} /> Cancel</>
+                                                }
+                                            </motion.button>
                                         </div>
                                     )}
 
+                                    {/* ══════ RECEIVER's VIEW ══════ */}
+
+                                    {/* Receiver: approve or reject the payer's claim */}
+                                    {isMyReceivable && !isMyPayment && isPending && (
+                                        <div className="flex flex-col items-end gap-1.5">
+                                            <span className="text-[10px] font-medium text-[#F59E0B] bg-[#F59E0B]/10 border border-[#F59E0B]/20 px-2 py-1 rounded-lg">
+                                                {fromUser?.full_name?.split(' ')[0]} says paid {formatAmount(Number(activeSettlement.amount))}
+                                            </span>
+                                            <div className="flex items-center gap-1.5">
+                                                <motion.button
+                                                    onClick={handleApprove}
+                                                    disabled={approvingPayment === activeSettlement.id}
+                                                    className="text-[10px] font-semibold text-green-400 cursor-pointer hover:bg-green-500/30 flex items-center gap-0.5 bg-green-500/15 px-2 py-1 rounded-lg border border-green-500/25 transition-colors"
+                                                    whileTap={{ scale: 0.92 }}
+                                                    title="Confirm you received this payment"
+                                                >
+                                                    {approvingPayment === activeSettlement.id
+                                                        ? <Loader2 size={10} className="animate-spin" />
+                                                        : <><Check size={10} /> Approve</>
+                                                    }
+                                                </motion.button>
+                                                <motion.button
+                                                    onClick={handleReject}
+                                                    disabled={rejectingPayment === activeSettlement.id}
+                                                    className="text-[10px] font-semibold text-red-400 cursor-pointer hover:bg-red-500/30 flex items-center gap-0.5 bg-red-500/15 px-2 py-1 rounded-lg border border-red-500/25 transition-colors"
+                                                    whileTap={{ scale: 0.92 }}
+                                                    title="Reject — payment not received"
+                                                >
+                                                    {rejectingPayment === activeSettlement.id
+                                                        ? <Loader2 size={10} className="animate-spin" />
+                                                        : <><X size={10} /> Reject</>
+                                                    }
+                                                </motion.button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* ══════ SHARED VIEWS ══════ */}
+
+                                    {/* Settlement completed — visible to both payer and receiver */}
                                     {isCompleted && (
                                         <span className="text-xs font-semibold text-green-400 flex items-center gap-1">
-                                            <CheckCircle size={12} /> Paid
+                                            <CheckCircle size={12} /> Settled
                                         </span>
                                     )}
 
-                                    {!isMyPayment && isPending && (
-                                        <span className="text-xs font-semibold text-[#F59E0B] bg-[#F59E0B]/10 border border-[#F59E0B]/20 px-2 py-1.5 rounded-xl flex items-center gap-1">
-                                            <Loader2 size={12} className="animate-spin" /> Paying...
-                                        </span>
-                                    )}
-
-                                    {!isMyPayment && !isPending && !isCompleted && (
+                                    {/* Receiver: no settlement in progress (payer hasn't clicked Pay yet) */}
+                                    {isMyReceivable && !isMyPayment && !isPending && !isCompleted && (
                                         <span className="text-xs font-semibold text-[#94A3B8] bg-white/05 border border-white/05 px-2 py-1.5 rounded-xl">
                                             Awaiting
                                         </span>
