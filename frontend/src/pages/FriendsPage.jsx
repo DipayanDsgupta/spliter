@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useApp } from '../context/AppContext'
-import { getAvatarColor, getInitials } from '../utils/helpers'
+import { getAvatarColor, getInitials, calculateNetBalances, formatAmount } from '../utils/helpers'
 import { UserPlus, Check, X, Loader2, Search, MessageCircle, ChevronRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
@@ -11,6 +11,7 @@ export default function FriendsPage() {
         currentUser, friendships, friendRequests,
         sendFriendRequest, acceptFriendRequest, rejectFriendRequest,
         getFriendIdFromFriendship, getUserById,
+        expenses, pendingSettlements
     } = useApp()
 
     const navigate = useNavigate()
@@ -228,6 +229,23 @@ export default function FriendsPage() {
                                 const friendUser = getUserById(friendId)
                                 const [c1, c2] = getAvatarColor(friendUser?.full_name || '')
 
+                                // Filter to expenses involving just these two users with NO group_id
+                                const sharedExpenses = expenses.filter(e => 
+                                    !e.group_id && 
+                                    e.expense_splits?.some(s => s.user_id === currentUser?.id) &&
+                                    e.expense_splits?.some(s => s.user_id === friendUser?.id)
+                                )
+                                
+                                // Filter to settlements between these two users with NO group_id
+                                const sharedSettlements = (pendingSettlements || []).filter(s => 
+                                    !s.group_id && s.status === 'completed' &&
+                                    ((s.payer_id === currentUser?.id && s.receiver_id === friendUser?.id) || 
+                                     (s.payer_id === friendUser?.id && s.receiver_id === currentUser?.id))
+                                )
+
+                                const balances = calculateNetBalances(sharedExpenses, sharedSettlements)
+                                const myNet = balances[currentUser?.id] || 0
+
                                 return (
                                     <motion.div
                                         key={friendship.id}
@@ -237,7 +255,7 @@ export default function FriendsPage() {
                                         initial={{ opacity: 0, y: 10 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{ delay: i * 0.05 }}
-                                        onClick={() => navigate(`/friends/${friendUser.id}`)}
+                                        onClick={() => navigate(`/friends/${friendUser?.id}`)}
                                     >
                                         <div className="flex items-center gap-3">
                                             <div className="avatar text-white text-xs shrink-0"
@@ -248,7 +266,22 @@ export default function FriendsPage() {
                                                 <p className="text-sm font-bold text-white truncate">{friendUser?.full_name}</p>
                                                 <p className="text-[10px] text-[#94A3B8]">{friendUser?.email}</p>
                                             </div>
-                                            <div className="flex items-center gap-1.5">
+                                            <div className="text-right shrink-0 mx-2">
+                                                {Math.abs(myNet) < 1 ? (
+                                                    <span className="text-xs font-semibold text-[#10B981]">Settled</span>
+                                                ) : myNet > 0 ? (
+                                                    <div>
+                                                        <p className="text-[10px] text-[#94A3B8] leading-tight mb-0.5">you get</p>
+                                                        <p className="font-bold text-xs amount-positive">{formatAmount(myNet)}</p>
+                                                    </div>
+                                                ) : (
+                                                    <div>
+                                                        <p className="text-[10px] text-[#94A3B8] leading-tight mb-0.5">you owe</p>
+                                                        <p className="font-bold text-xs amount-negative">{formatAmount(-myNet)}</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-1.5 shrink-0">
                                                 <div
                                                     className="w-8 h-8 rounded-xl flex items-center justify-center"
                                                     style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)' }}

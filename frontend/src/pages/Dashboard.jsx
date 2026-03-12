@@ -70,6 +70,65 @@ function GroupCard({ group, onClick }) {
     )
 }
 
+function FriendCard({ friendUser, onClick }) {
+    const { expenses, currentUser, pendingSettlements } = useApp()
+
+    // Filter to expenses involving just these two users with NO group_id
+    const sharedExpenses = expenses.filter(e => 
+        !e.group_id && 
+        e.expense_splits?.some(s => s.user_id === currentUser?.id) &&
+        e.expense_splits?.some(s => s.user_id === friendUser?.id)
+    )
+    
+    // Filter to settlements between these two users with NO group_id
+    const sharedSettlements = (pendingSettlements || []).filter(s => 
+        !s.group_id && s.status === 'completed' &&
+        ((s.payer_id === currentUser?.id && s.receiver_id === friendUser?.id) || 
+         (s.payer_id === friendUser?.id && s.receiver_id === currentUser?.id))
+    )
+
+    const balances = calculateNetBalances(sharedExpenses, sharedSettlements)
+    const myNet = balances[currentUser?.id] || 0
+
+    const [c1, c2] = getAvatarColor(friendUser?.full_name || '')
+
+    return (
+        <motion.div
+            className="card cursor-pointer"
+            whileHover={{ y: -2, borderColor: 'rgba(124,58,237,0.3)' }}
+            whileTap={{ scale: 0.98 }}
+            onClick={onClick}
+            transition={{ duration: 0.15 }}
+        >
+            <div className="flex items-center gap-4">
+                <div className="avatar text-white text-[16px] shrink-0 w-10 h-10 flex items-center justify-center rounded-xl"
+                    style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
+                    {getInitials(friendUser?.full_name)}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-white text-[15px] truncate">{friendUser?.full_name}</h3>
+                    <p className="text-xs text-[#94A3B8] mt-0.5">{sharedExpenses.length} individual expenses</p>
+                </div>
+                <div className="text-right shrink-0">
+                    {Math.abs(myNet) < 1 ? (
+                        <span className="text-xs font-semibold text-[#94A3B8] bg-white/05 px-2 py-1 rounded-full">Settled</span>
+                    ) : myNet > 0 ? (
+                        <div>
+                            <p className="text-xs text-[#94A3B8]">you get</p>
+                            <p className="font-bold text-base amount-positive">{formatAmount(myNet)}</p>
+                        </div>
+                    ) : (
+                        <div>
+                            <p className="text-xs text-[#94A3B8]">you owe</p>
+                            <p className="font-bold text-base amount-negative">{formatAmount(-myNet)}</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </motion.div>
+    )
+}
+
 function RecentActivity() {
     const { expenses, getUserById } = useApp()
     const recent = [...expenses].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5)
@@ -123,7 +182,7 @@ function RecentActivity() {
 
 export default function Dashboard() {
     const navigate = useNavigate()
-    const { currentUser, groups, expenses, pendingSettlements } = useApp()
+    const { currentUser, groups, expenses, pendingSettlements, friendships, getUserById, getFriendIdFromFriendship } = useApp()
 
     // Calculate overall net balance (adjusted for settlements)
     const completedSettlements = (pendingSettlements || []).filter(s => s.status === 'completed')
@@ -258,6 +317,102 @@ export default function Dashboard() {
                                     <GroupCard group={group} onClick={() => navigate(`/groups/${group.id}`)} />
                                 </motion.div>
                             ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Friends */}
+                <div className="mb-8">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold text-white">Your Friends</h2>
+                        <button
+                            className="text-purple-400 text-sm font-semibold flex items-center gap-1"
+                            onClick={() => navigate('/friends')}
+                        >
+                            See all <ArrowUpRight size={14} />
+                        </button>
+                    </div>
+                    {friendships.length === 0 ? (
+                        <motion.div
+                            className="text-center py-10 rounded-3xl cursor-pointer"
+                            style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}
+                            onClick={() => navigate('/friends')}
+                            whileTap={{ scale: 0.98 }}
+                            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                        >
+                            <div className="text-4xl mb-3">👋</div>
+                            <p className="text-white font-semibold text-sm mb-1">No friends yet</p>
+                            <p className="text-[#475569] text-xs mb-4">Add a friend to split expenses directly</p>
+                            <span className="text-xs font-bold px-4 py-2 rounded-full"
+                                style={{ background: 'rgba(124,58,237,0.15)', color: '#9D5FF3', border: '1px solid rgba(124,58,237,0.3)' }}>
+                                + Add Friend
+                            </span>
+                        </motion.div>
+                    ) : (
+                        <div className="space-y-3">
+                            {friendships.slice(0, 3).map((friendship, i) => {
+                                const friendId = getFriendIdFromFriendship(friendship)
+                                const friendUser = getUserById(friendId)
+                                if (!friendUser) return null;
+                                return (
+                                    <motion.div
+                                        key={friendship.id}
+                                        initial={{ opacity: 0, y: 16 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ delay: i * 0.08 }}
+                                    >
+                                        <FriendCard friendUser={friendUser} onClick={() => navigate(`/friends/${friendUser.id}`)} />
+                                    </motion.div>
+                                )
+                            })}
+                        </div>
+                    )}
+                </div>
+
+                {/* Friends */}
+                <div className="mb-8">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold text-white">Your Friends</h2>
+                        <button
+                            className="text-purple-400 text-sm font-semibold flex items-center gap-1"
+                            onClick={() => navigate('/friends')}
+                        >
+                            See all <ArrowUpRight size={14} />
+                        </button>
+                    </div>
+                    {friendships.length === 0 ? (
+                        <motion.div
+                            className="text-center py-10 rounded-3xl cursor-pointer"
+                            style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}
+                            onClick={() => navigate('/friends')}
+                            whileTap={{ scale: 0.98 }}
+                            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                        >
+                            <div className="text-4xl mb-3">👋</div>
+                            <p className="text-white font-semibold text-sm mb-1">No friends yet</p>
+                            <p className="text-[#475569] text-xs mb-4">Add a friend to split expenses directly</p>
+                            <span className="text-xs font-bold px-4 py-2 rounded-full"
+                                style={{ background: 'rgba(124,58,237,0.15)', color: '#9D5FF3', border: '1px solid rgba(124,58,237,0.3)' }}>
+                                + Add Friend
+                            </span>
+                        </motion.div>
+                    ) : (
+                        <div className="space-y-3">
+                            {friendships.slice(0, 3).map((friendship, i) => {
+                                const friendId = getFriendIdFromFriendship(friendship)
+                                const friendUser = getUserById(friendId)
+                                if (!friendUser) return null;
+                                return (
+                                    <motion.div
+                                        key={friendship.id}
+                                        initial={{ opacity: 0, y: 16 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ delay: i * 0.08 }}
+                                    >
+                                        <FriendCard friendUser={friendUser} onClick={() => navigate(`/friends/${friendUser.id}`)} />
+                                    </motion.div>
+                                )
+                            })}
                         </div>
                     )}
                 </div>
