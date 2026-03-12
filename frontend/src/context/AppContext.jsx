@@ -716,6 +716,43 @@ export function AppProvider({ children }) {
         setUnreadNotifCount(0)
     }
 
+    /* ══════════════════════════════════════════
+       CHAT SYSTEM (JSON blob storage)
+    ══════════════════════════════════════════ */
+
+    /** Load chat messages for a group or direct conversation */
+    const loadChatMessages = async (chatType, referenceId) => {
+        if (!SUPABASE_CONFIGURED) return []
+        try {
+            const { data } = await supabase
+                .from('chats')
+                .select('messages')
+                .eq('chat_type', chatType)
+                .eq('reference_id', referenceId)
+                .single()
+            return data?.messages || []
+        } catch {
+            return []
+        }
+    }
+
+    /** Send a chat message (atomic append via RPC) */
+    const sendChatMessage = async (chatType, referenceId, content) => {
+        if (!SUPABASE_CONFIGURED || !currentUser) return
+        const message = {
+            id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            sender: currentUser.id,
+            text: content.trim(),
+            ts: new Date().toISOString(),
+        }
+        await supabase.rpc('append_chat_message', {
+            p_chat_type: chatType,
+            p_reference_id: referenceId,
+            p_message: message,
+        })
+        return message
+    }
+
     const value = {
         currentUser, setCurrentUser,
         login, logout, completeProfile, needsProfile,
@@ -731,6 +768,8 @@ export function AppProvider({ children }) {
         getFriendIdFromFriendship, isFriend, loadFriendData,
         // Notifications
         notifications, unreadNotifCount, loadNotifications, markNotificationRead, markAllNotificationsRead,
+        // Chat
+        loadChatMessages, sendChatMessage,
     }
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>

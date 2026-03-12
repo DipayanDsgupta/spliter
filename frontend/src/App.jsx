@@ -15,6 +15,7 @@ import AddExpensePage from './pages/AddExpensePage'
 import BalancesPage from './pages/BalancesPage'
 import ActivityPage from './pages/ActivityPage'
 import FriendsPage from './pages/FriendsPage'
+import ChatPage from './pages/ChatPage'
 import ProfilePage from './pages/ProfilePage'
 
 export default function App() {
@@ -51,6 +52,8 @@ export default function App() {
             <Route path="/balances" element={<BalancesPage />} />
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/friends" element={<FriendsPage />} />
+            <Route path="/chat/:groupId" element={<ChatPage />} />
+            <Route path="/chat" element={<ChatPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -16,8 +16,8 @@ export default function BottomNav() {
     const navigate = useNavigate()
     const { unreadNotifCount } = useApp()
 
-    // Hide on auth and add expense pages
-    const hide = ['/auth', '/add-expense', '/profile-setup'].some(p => location.pathname.startsWith(p))
+    // Hide on auth, add expense, profile setup, and chat pages
+    const hide = ['/auth', '/add-expense', '/profile-setup', '/chat'].some(p => location.pathname.startsWith(p))
     if (hide) return null
 
     return (

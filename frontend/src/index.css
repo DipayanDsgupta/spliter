@@ -393,3 +393,8 @@ body {
   text-transform: uppercase;
   color: #94A3B8;
 }
+
+/* Safe area bottom padding (for chat input on notched phones) */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

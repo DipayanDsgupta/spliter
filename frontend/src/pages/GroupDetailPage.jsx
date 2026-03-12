@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp, Copy, Trash2, CheckCircle } from 'lucide-react'
+import { ArrowLeft, Plus, Users, Zap, ChevronDown, ChevronUp, Copy, Trash2, CheckCircle, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useApp } from '../context/AppContext'
 import { calculateNetBalances, simplifyDebts, formatAmount, getAvatarColor, getInitials, formatDate, CATEGORIES } from '../utils/helpers'
@@ -205,6 +205,16 @@ export default function GroupDetailPage() {
                         </div>
                     </div>
                 </div>
+
+                {/* Group Chat button */}
+                <motion.button
+                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm mb-3"
+                    style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', color: '#60A5FA' }}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={() => navigate(`/chat/${id}`)}
+                >
+                    <MessageCircle size={16} /> Group Chat
+                </motion.button>
 
                 {/* "Simplify Debts" button */}
                 <motion.button
