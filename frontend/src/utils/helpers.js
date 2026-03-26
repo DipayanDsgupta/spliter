@@ -46,7 +46,7 @@ export function simplifyDebts(balances) {
  * Calculate net balances for a group
  * expenses: array of { id, amount, paid_by: [{user_id, amount_paid}], splits: [{user_id, amount_owed}] }
  */
-export function calculateNetBalances(expenses, completedSettlements = []) {
+export function calculateNetBalances(expenses, completedSettlements = [], sponsorships = []) {
     const balances = {}
 
     for (const expense of expenses) {
@@ -65,6 +65,28 @@ export function calculateNetBalances(expenses, completedSettlements = []) {
         const amt = Number(s.amount)
         balances[s.payer_id] = (balances[s.payer_id] || 0) + amt
         balances[s.receiver_id] = (balances[s.receiver_id] || 0) - amt
+    }
+
+    // Dynamically calculate raw shares for percentage sponsorships
+    const rawShares = {}
+    for (const expense of expenses) {
+        for (const split of expense.splits) {
+            rawShares[split.user_id] = (rawShares[split.user_id] || 0) + split.amount_owed
+        }
+    }
+
+    // Apply sponsorships: sponsor takes on recipient's debt
+    for (const sp of sponsorships) {
+        let amt = Number(sp.amount)
+        if (sp.percentage) {
+            const recipientTotalShares = rawShares[sp.recipient_id] || 0
+            amt = Math.round((recipientTotalShares * Number(sp.percentage) / 100) * 100) / 100
+        }
+
+        if (amt > 0) {
+            balances[sp.sponsor_id] = (balances[sp.sponsor_id] || 0) - amt  // sponsor owes more
+            balances[sp.recipient_id] = (balances[sp.recipient_id] || 0) + amt  // recipient owes less
+        }
     }
 
     return balances
@@ -160,6 +182,85 @@ export function formatDate(dateStr) {
 export function formatTime(dateStr) {
     const date = new Date(dateStr)
     return date.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+
+/**
+ * Calculate how much each member has actually spent (paid out of pocket)
+ * Returns { userId: totalAmountPaid }
+ */
+export function calculateMemberSpendings(expenses) {
+    const spendings = {}
+    for (const expense of expenses) {
+        for (const payer of expense.paid_by) {
+            spendings[payer.user_id] = (spendings[payer.user_id] || 0) + payer.amount_paid
+        }
+    }
+    return spendings
+}
+
+/**
+ * Build daily spending data for time-series graph
+ * Returns sorted array of { date: 'YYYY-MM-DD', [userId]: amountSpentThatDay, ... }
+ */
+export function buildDailySpendingData(expenses) {
+    const dailyMap = {} // date -> { userId: amount }
+
+    for (const expense of expenses) {
+        const date = new Date(expense.created_at).toISOString().split('T')[0]
+        if (!dailyMap[date]) dailyMap[date] = {}
+        for (const payer of expense.paid_by) {
+            dailyMap[date][payer.user_id] = (dailyMap[date][payer.user_id] || 0) + payer.amount_paid
+        }
+    }
+
+    return Object.entries(dailyMap)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, userAmounts]) => ({ date, ...userAmounts }))
+}
+
+/**
+ * Calculate each member's total share (amount_owed) — what they actually consumed
+ * Returns { userId: totalAmountOwed }
+ */
+export function calculateMemberShares(expenses, sponsorships = []) {
+    const shares = {}
+    for (const expense of expenses) {
+        for (const split of expense.splits) {
+            shares[split.user_id] = (shares[split.user_id] || 0) + split.amount_owed
+        }
+    }
+    // Adjust for sponsorships
+    for (const sp of sponsorships) {
+        let amt = Number(sp.amount)
+        if (sp.percentage) {
+            const recipientTotalShares = shares[sp.recipient_id] || 0
+            amt = Math.round((recipientTotalShares * Number(sp.percentage) / 100) * 100) / 100
+        }
+
+        if (amt > 0) {
+            shares[sp.recipient_id] = (shares[sp.recipient_id] || 0) - amt  // recipient's cost reduced
+            shares[sp.sponsor_id] = (shares[sp.sponsor_id] || 0) + amt     // sponsor's cost increased
+        }
+    }
+    return shares
+}
+
+/**
+ * Build daily shares data for time-series graph (based on amount_owed)
+ * Returns sorted array of { date: 'YYYY-MM-DD', [userId]: sharesThatDay, ... }
+ */
+export function buildDailySharesData(expenses) {
+    const dailyMap = {}
+    for (const expense of expenses) {
+        const date = new Date(expense.created_at).toISOString().split('T')[0]
+        if (!dailyMap[date]) dailyMap[date] = {}
+        for (const split of expense.splits) {
+            dailyMap[date][split.user_id] = (dailyMap[date][split.user_id] || 0) + split.amount_owed
+        }
+    }
+    return Object.entries(dailyMap)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, userAmounts]) => ({ date, ...userAmounts }))
 }
 
 export const CATEGORIES = [

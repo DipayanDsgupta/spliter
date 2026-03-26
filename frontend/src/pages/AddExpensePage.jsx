@@ -15,12 +15,11 @@ const SPLIT_METHODS = [
 export default function AddExpensePage() {
     const navigate = useNavigate()
     const [searchParams] = useSearchParams()
-    const { addExpense, groups, friends, currentUser } = useApp()
+    const { addExpense, groups, currentUser, getUserById } = useApp()
 
-    // Determine initial target (group or friend)
+    // Determine initial target (group)
     const initialTarget = () => {
         const g = searchParams.get('group'); if (g) return `group_${g}`
-        const f = searchParams.get('friend'); if (f) return `friend_${f}`
         return ''
     }
 
@@ -40,29 +39,19 @@ export default function AddExpensePage() {
 
     // Compute contextual members based on target
     const isGroupTarget = target.startsWith('group_')
-    const isFriendTarget = target.startsWith('friend_')
-    const actualTargetId = target.replace('group_', '').replace('friend_', '')
+    const actualTargetId = target.replace('group_', '')
 
     const selectedGroup = isGroupTarget ? groups.find(g => g.id === actualTargetId) : null
-    const selectedFriend = isFriendTarget ? friends.find(f => f.id === actualTargetId) : null
-
-    const allPeople = [currentUser, ...friends]
     
-    let groupMembers = allPeople
-    if (isGroupTarget && selectedGroup) {
-        groupMembers = allPeople.filter(p => selectedGroup.members.includes(p.id))
-    } else if (isFriendTarget && selectedFriend) {
-        groupMembers = [currentUser, selectedFriend]
+    let groupMembers = []
+    if (selectedGroup) {
+        groupMembers = selectedGroup.members.map(id => getUserById(id)).filter(Boolean)
     }
 
     // Initialize participants & payers when target changes
     useEffect(() => {
         if (isGroupTarget && selectedGroup) {
             setParticipants(selectedGroup.members)
-            setPayers([currentUser.id])
-            setPayerAmounts({ [currentUser.id]: '' })
-        } else if (isFriendTarget && selectedFriend) {
-            setParticipants([currentUser.id, selectedFriend.id])
             setPayers([currentUser.id])
             setPayerAmounts({ [currentUser.id]: '' })
         }
@@ -155,8 +144,6 @@ export default function AddExpensePage() {
             
             if (isGroupTarget) {
                 navigate(`/groups/${actualTargetId}`)
-            } else if (isFriendTarget) {
-                navigate(`/friends/${actualTargetId}`)
             } else {
                 navigate('/')
             }
@@ -243,18 +230,11 @@ export default function AddExpensePage() {
                                     className="input-field appearance-none cursor-pointer"
                                     style={{ paddingRight: '36px' }}
                                 >
-                                    <option value="">Select Group or Friend</option>
+                                    <option value="">Select Group</option>
                                     {groups.length > 0 && (
                                         <optgroup label="Groups">
                                             {groups.map(g => (
                                                 <option key={`g-${g.id}`} value={`group_${g.id}`}>{g.emoji} {g.name}</option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                    {friends.length > 0 && (
-                                        <optgroup label="Friends">
-                                            {friends.map(f => (
-                                                <option key={`f-${f.id}`} value={`friend_${f.id}`}>👤 {f.full_name}</option>
                                             ))}
                                         </optgroup>
                                     )}
@@ -318,7 +298,7 @@ export default function AddExpensePage() {
                                 <div className="flex-1">
                                     <p className="font-bold text-white">{title}</p>
                                     <p className="text-[#94A3B8] text-sm">
-                                        {isGroupTarget ? `${selectedGroup?.emoji} ${selectedGroup?.name}` : `👤 ${selectedFriend?.full_name}`}
+                                        {selectedGroup ? `${selectedGroup?.emoji} ${selectedGroup?.name}` : ''}
                                     </p>
                                 </div>
                                 <p className="text-xl font-extrabold gradient-text">₹{amount}</p>

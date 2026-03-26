@@ -5,6 +5,9 @@ import { getAvatarColor, getInitials, formatAmount, calculateNetBalances } from 
 import { LogOut, Copy, CheckCircle, ChevronRight, Edit2, Save, X, Bell, Clock, CheckCheck } from 'lucide-react'
 import { upsertUserProfile } from '../services/supabase'
 import toast from 'react-hot-toast'
+import PullToRefresh from '../components/PullToRefresh'
+
+import { useNavigate } from 'react-router-dom'
 
 function getTimeAgo(dateStr) {
     const diff = Date.now() - new Date(dateStr).getTime()
@@ -17,7 +20,8 @@ function getTimeAgo(dateStr) {
 }
 
 export default function ProfilePage() {
-    const { currentUser, logout, expenses, groups, setCurrentUser, notifications, unreadNotifCount, markNotificationRead, markAllNotificationsRead, pendingSettlements } = useApp()
+    const navigate = useNavigate()
+    const { currentUser, logout, expenses, groups, setCurrentUser, notifications, unreadNotifCount, markNotificationRead, markAllNotificationsRead, pendingSettlements, sponsorships, manualRefresh } = useApp()
     const [showNotifications, setShowNotifications] = useState(false)
     const [copied, setCopied] = useState(false)
     const [editing, setEditing] = useState(false)
@@ -31,7 +35,7 @@ export default function ProfilePage() {
     const [c1, c2] = getAvatarColor(currentUser?.full_name || '')
 
     const completedSettlements = (pendingSettlements || []).filter(s => s.status === 'completed')
-    const allBalances = calculateNetBalances(expenses, completedSettlements)
+    const allBalances = calculateNetBalances(expenses, completedSettlements, sponsorships)
     const myNet = allBalances[currentUser?.id] || 0
     const totalSpent = expenses
         .flatMap(e => e.splits)
@@ -93,8 +97,9 @@ export default function ProfilePage() {
     ]
 
     return (
-        <div className="page animated-bg">
-            <div className="px-5 pt-12 pb-6">
+        <PullToRefresh onRefresh={manualRefresh}>
+            <div className="page animated-bg">
+                <div className="px-5 pt-12 pb-24">
 
                 {/* ── Header avatar ── */}
                 <motion.div className="text-center mb-6" initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
@@ -200,11 +205,22 @@ export default function ProfilePage() {
 
                             {/* Edit button */}
                             <motion.button
-                                className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl mb-5 font-semibold text-sm"
+                                className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl mb-3 font-semibold text-sm"
                                 style={{ background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)', color: '#9D5FF3' }}
                                 onClick={startEdit} whileTap={{ scale: 0.97 }}>
                                 <Edit2 size={14} />
                                 Edit Profile — Name, Phone &amp; UPI ID
+                            </motion.button>
+                            
+                            {/* Settlement History Link */}
+                            <motion.button
+                                onClick={() => navigate('/settlement-history')}
+                                className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl mb-5 font-semibold text-sm transition-colors"
+                                style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: '#F1F5F9' }}
+                                whileTap={{ scale: 0.97 }}>
+                                <Clock size={14} className="text-[#94A3B8]" />
+                                View Settlement History
+                                <ChevronRight size={14} className="text-[#64748B] ml-1" />
                             </motion.button>
                         </motion.div>
                     )}
@@ -344,6 +360,7 @@ export default function ProfilePage() {
 
                 <p className="text-center text-[#475569] text-xs mt-6">Spliter v1.0 · Built with ❤️</p>
             </div>
-        </div>
+            </div>
+        </PullToRefresh>
     )
 }

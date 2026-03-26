@@ -1,7 +1,9 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import { Preferences } from '@capacitor/preferences'
 import { supabase, onAuthChange, fetchUserProfile, upsertUserProfile, signOut, claimPendingInvites } from '../services/supabase'
 import { MOCK_FRIENDS, MOCK_GROUPS, MOCK_EXPENSES, MOCK_SETTLEMENTS } from '../utils/mockData'
 import toast from 'react-hot-toast'
+import { sendNotification } from '../utils/notify'
 
 const AppContext = createContext(null)
 
@@ -13,17 +15,20 @@ export function AppProvider({ children }) {
     const [currentUser, setCurrentUser] = useState(null)
     const [needsProfile, setNeedsProfile] = useState(false)
     const [isLoading, setIsLoading] = useState(true)
+    const [dataLoading, setDataLoading] = useState(true)
 
     const [friends, setFriends] = useState(SUPABASE_CONFIGURED ? [] : MOCK_FRIENDS)
     const [groups, setGroups] = useState(SUPABASE_CONFIGURED ? [] : MOCK_GROUPS)
     const [expenses, setExpenses] = useState(SUPABASE_CONFIGURED ? [] : MOCK_EXPENSES)
     const [settlements, setSettlements] = useState(SUPABASE_CONFIGURED ? [] : MOCK_SETTLEMENTS)
     const [pendingSettlements, setPendingSettlements] = useState([])
-    const [friendships, setFriendships] = useState([])
-    const [friendRequests, setFriendRequests] = useState([])
+    const [sponsorships, setSponsorships] = useState([])
     const [notifications, setNotifications] = useState([])
     const [unreadNotifCount, setUnreadNotifCount] = useState(0)
     const prevGroupsRef = useRef([])
+
+    // A ref to hold the load functions so initAuth can call them without stale closures
+    const loadAllDataRef = useRef(null)
 
     /* ── Load groups + expenses in PARALLEL (fast!) ── */
     const loadUserData = useCallback(async (userId) => {
@@ -44,7 +49,7 @@ export function AppProvider({ children }) {
                 const currentIds = loadedGroups.map(g => g.id)
                 const lostGroups = prev.filter(g => !currentIds.includes(g.id))
                 lostGroups.forEach(g => {
-                    toast.error(`You were removed from group "${g.name}" or it was deleted 🚫`, { duration: 5000 })
+                    sendNotification('Group Update', `You were removed from group "${g.name}" or it was deleted 🚫`, 'error')
                 })
             }
 
@@ -61,11 +66,13 @@ export function AppProvider({ children }) {
 
             if (groupIds.length > 0) {
                 promises.push(supabase.from('group_members').select('group_id, user_id').in('group_id', groupIds))
+                promises.push(supabase.from('sponsorships').select('*').in('group_id', groupIds).order('created_at', { ascending: false }))
             } else {
                 promises.push(Promise.resolve({ data: [] })) // Dummy resolved for membersRes
+                promises.push(Promise.resolve({ data: [] })) // Dummy resolved for sponsorshipsRes
             }
 
-            const [expensesRes, settlementsRes, membersRes] = await Promise.all(promises)
+            const [expensesRes, settlementsRes, membersRes, sponsorshipsRes] = await Promise.all(promises)
 
             // Populate members per group & extract unique user IDs
             const uniqueUserIds = new Set()
@@ -83,7 +90,7 @@ export function AppProvider({ children }) {
                 // 1. Did we lose any groups?
                 const lostGroups = prev.filter(g => !currentIds.includes(g.id))
                 lostGroups.forEach(g => {
-                    toast.error(`You were removed from group "${g.name}" or it was deleted 🚫`, { duration: 5000 })
+                    sendNotification('Group Update', `You were removed from group "${g.name}" or it was deleted 🚫`, 'error')
                 })
 
                 // 2. Did any existing groups lose members?
@@ -92,7 +99,7 @@ export function AppProvider({ children }) {
                     if (oldGroup) {
                         const lostMembers = oldGroup.members.filter(m => !currGroup.members.includes(m))
                         if (lostMembers.length > 0) {
-                            toast(`A member was removed from "${currGroup.name}" ℹ️`, { icon: '🚪' })
+                            sendNotification('Member Removed', `A member was removed from "${currGroup.name}"`, 'info')
                         }
                     }
                 })
@@ -123,6 +130,9 @@ export function AppProvider({ children }) {
             if (settlementsRes?.data) {
                 setPendingSettlements(settlementsRes.data)
             }
+            if (sponsorshipsRes?.data) {
+                setSponsorships(sponsorshipsRes.data)
+            }
         } catch (err) {
             console.warn('Data load error:', err)
         }
@@ -147,117 +157,121 @@ export function AppProvider({ children }) {
         }
     }
 
-    /* ── Handle profile-complete session (existing user login) ── */
-    const sessionHandled = useRef(false)
-
-    const handleUserSession = useCallback(async (authUser) => {
-        // Prevent double-init from getSession + onAuthChange firing simultaneously
-        if (sessionHandled.current) return
-        sessionHandled.current = true
-
-        try {
-            const { data } = await fetchUserProfile(authUser.id)
-
-            if (data?.full_name && data?.upi_id) {
-                const userObj = { id: authUser.id, email: authUser.email || '', ...data }
-                setCurrentUser(userObj)
-                localStorage.setItem('spliter_user_cache', JSON.stringify(userObj))
-                setNeedsProfile(false)
-                setIsLoading(false) // ← Show page IMMEDIATELY — data loads in background
-
-                // Background: claim invites + load data (non-blocking)
-                Promise.all([
-                    claimPendingInvites(authUser.id, authUser.email, data.phone),
-                    claimJoinLink(authUser.id),
-                ]).then(() => {
-                    loadUserData(authUser.id)
-                    loadFriendData(authUser.id)
-                    loadNotifications(authUser.id)
-                }).catch(err => console.warn('Background load error:', err))
-            } else {
-                // New user — profile incomplete, send to setup
-                setCurrentUser({
-                    id: authUser.id,
-                    email: authUser.email || authUser.user_metadata?.email || '',
-                    full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || '',
-                })
-                setNeedsProfile(true)
-                setIsLoading(false)
-            }
-        } catch (e) {
-            console.error('Session init error:', e)
-
-            // Critical Fix: If network is stuck or fetch fails on refresh, 
-            // fallback to cache instead of leaving currentUser as null (which kicks them out).
-            const cached = localStorage.getItem('spliter_user_cache')
-            if (cached) {
-                const parsed = JSON.parse(cached)
-                // Need to ensure the cached user matches the auth user ID to prevent account bleed
-                if (parsed.id === authUser.id) {
-                    setCurrentUser(parsed)
-                    setNeedsProfile(false)
-                }
-            } else {
-                setCurrentUser({
-                    id: authUser.id,
-                    email: authUser.email || authUser.user_metadata?.email || '',
-                    full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || 'User',
-                })
-            }
-
-            setIsLoading(false)
-            sessionHandled.current = false // allow retry on error
-            loadUserData(authUser.id) // Try to load their groups anyway in background
-        }
-    }, [loadUserData])
+    /* ── Refs ── */
+    const dataLoaded = useRef(false)
 
     /* ── Auth bootstrapping ── */
     useEffect(() => {
         if (!SUPABASE_CONFIGURED) {
             const saved = localStorage.getItem('spliter_user')
             if (saved) setCurrentUser(JSON.parse(saved))
-            setTimeout(() => setIsLoading(false), 400)
+            setTimeout(() => { setIsLoading(false); setDataLoading(false) }, 400)
             return
         }
 
-        // Reset guard on mount so re-renders work correctly
-        sessionHandled.current = false
+        dataLoaded.current = false
 
-        // 10-second safety fallback: Never get stuck continuously loading
-        const safetyTimer = setTimeout(() => {
-            setIsLoading(false)
-        }, 10000)
+        // Safety: never stay stuck loading forever
+        const safetyTimer = setTimeout(() => setIsLoading(false), 10000)
 
-        const initAuth = async () => {
+        // ──────────────────────────────────────────────────
+        // PHASE 1: Read cache FIRST for instant dashboard render
+        // ──────────────────────────────────────────────────
+        ;(async () => {
             try {
-                const { data: { session }, error } = await supabase.auth.getSession()
-                if (error) {
-                    console.warn('getSession error:', error)
-                    setIsLoading(false)
-                    return
+                const { value: cached } = await Preferences.get({ key: 'spliter_user_cache' })
+                if (cached) {
+                    const parsed = JSON.parse(cached)
+                    if (parsed && parsed.id) {
+                        setCurrentUser(parsed)
+                        setNeedsProfile(false)
+                        setIsLoading(false) // <-- instant dashboard render from cache
+                    }
                 }
-                if (session?.user) {
-                    await handleUserSession(session.user)
+            } catch (e) { /* corrupted cache */ }
+        })()
+
+        // ──────────────────────────────────────────────────
+        // PHASE 2: onAuthStateChange is the SOLE session driver
+        // Supabase v2 fires INITIAL_SESSION on subscribe when
+        // a persisted session exists. This is the ONLY reliable
+        // way to detect sessions with async storage.
+        // ──────────────────────────────────────────────────
+        const handleSession = async (event, session) => {
+            // Ignore events with no session (except SIGNED_OUT)
+            if (!session?.user) {
+                if (event === 'SIGNED_OUT' || event === 'INITIAL_SESSION') {
+                    // No session exists — clear cache, go to login
+                    await Preferences.remove({ key: 'spliter_user_cache' })
+                    setCurrentUser(null)
+                    setNeedsProfile(false)
+                    setIsLoading(false)
+                    dataLoaded.current = false
+                }
+                return
+            }
+
+            const userId = session.user.id
+
+            // ── Load user profile ──
+            try {
+                const { data: profileData } = await fetchUserProfile(userId)
+                if (profileData?.full_name && profileData?.upi_id) {
+                    const userObj = { id: userId, email: session.user.email || '', ...profileData }
+                    setCurrentUser(userObj)
+                    await Preferences.set({ key: 'spliter_user_cache', value: JSON.stringify(userObj) })
+                    setNeedsProfile(false)
+                    setIsLoading(false)
                 } else {
+                    // New user — needs profile setup
+                    setCurrentUser({
+                        id: userId,
+                        email: session.user.email || session.user.user_metadata?.email || '',
+                        full_name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || '',
+                    })
+                    setNeedsProfile(true)
                     setIsLoading(false)
+                    return // Don't load data for incomplete profiles
                 }
-            } catch (err) {
-                console.error('getSession exception:', err)
+            } catch (e) {
+                console.warn('Profile fetch error:', e)
+                // Keep cached user if available, just ensure loading stops
                 setIsLoading(false)
+            }
+
+            // ── Load ALL app data (groups, expenses, friends, notifications) ──
+            if (!dataLoaded.current) {
+                dataLoaded.current = true
+                setDataLoading(true)
+                try {
+                    if (loadAllDataRef.current) {
+                        await loadAllDataRef.current(userId)
+                    } else {
+                        await loadUserData(userId)
+                    }
+                } catch (e) {
+                    console.warn('Data load error:', e)
+                    dataLoaded.current = false
+                } finally {
+                    setIsLoading(false)
+                    setDataLoading(false)
+                }
+            }
+
+            // ── Background: claim invites (non-blocking) ──
+            if (event === 'SIGNED_IN') {
+                Promise.all([
+                    claimPendingInvites(userId, session.user.email, ''),
+                    claimJoinLink(userId),
+                ]).catch(e => console.warn('Invite claim error:', e))
             }
         }
-        initAuth()
 
-        const { data: { subscription } } = onAuthChange(async (event, session) => {
-            if (event === 'SIGNED_IN' && session?.user) {
-                await handleUserSession(session.user)
-            }
-            if (event === 'SIGNED_OUT') {
-                sessionHandled.current = false
-                localStorage.removeItem('spliter_user_cache')
-                setCurrentUser(null)
-                setNeedsProfile(false)
-                setIsLoading(false)
+        const { data: { subscription } } = onAuthChange((event, session) => {
+            // Handle: INITIAL_SESSION (app reopen), SIGNED_IN (fresh login),
+            // TOKEN_REFRESHED (silent refresh), SIGNED_OUT (logout)
+            if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+                handleSession(event, session)
             }
         })
 
@@ -265,7 +279,7 @@ export function AppProvider({ children }) {
             clearTimeout(safetyTimer)
             subscription.unsubscribe()
         }
-    }, [handleUserSession])
+    }, [loadUserData])
 
     /* ── End handleUserSession / Auth bootstrap ── */
 
@@ -371,7 +385,7 @@ export function AppProvider({ children }) {
     }
 
     const addGroup = async (group) => {
-        const id = `group-${Date.now()}`
+        const id = `${Date.now()}`
         const g = { ...group, id, created_at: new Date().toISOString(), total_expenses: 0 }
 
         if (SUPABASE_CONFIGURED && currentUser) {
@@ -428,10 +442,28 @@ export function AppProvider({ children }) {
     const deleteGroup = async (groupId) => {
         if (!SUPABASE_CONFIGURED) return
         try {
+            // DB: delete settlements and sponsorships for this group first
+            await supabase.from('settlements_tracker').delete().eq('group_id', groupId)
+            await supabase.from('sponsorships').delete().eq('group_id', groupId)
             await supabase.from('groups').delete().eq('id', groupId)
+            // Local state: cascade-clear everything tied to this group
             setGroups(prev => prev.filter(g => g.id !== groupId))
             setExpenses(prev => prev.filter(e => e.group_id !== groupId))
+            setPendingSettlements(prev => prev.filter(s => s.group_id !== groupId))
+            setSponsorships(prev => prev.filter(s => s.group_id !== groupId))
         } catch (e) { console.error('deleteGroup error:', e) }
+    }
+
+    const transferAdmin = async (groupId, newAdminId) => {
+        if (!SUPABASE_CONFIGURED) return
+        try {
+            const { error } = await supabase.from('groups').update({ created_by: newAdminId }).eq('id', groupId)
+            if (error) throw error
+            setGroups(prev => prev.map(g => g.id === groupId ? { ...g, created_by: newAdminId } : g))
+        } catch (e) {
+            console.error('transferAdmin error:', e)
+            throw e
+        }
     }
 
     const deleteExpense = async (expenseId) => {
@@ -439,6 +471,88 @@ export function AppProvider({ children }) {
         const { error } = await supabase.from('expenses').delete().eq('id', expenseId)
         if (error) throw error
         setExpenses(prev => prev.filter(e => e.id !== expenseId))
+    }
+
+    const updateExpense = async (expenseId, updatedData) => {
+        const { paid_by, splits, ...updateFields } = updatedData
+        if (SUPABASE_CONFIGURED) {
+            // Update expense base fields
+            const { error: expErr } = await supabase.from('expenses').update(updateFields).eq('id', expenseId)
+            if (expErr) throw new Error(expErr.message || 'Failed to update expense')
+
+            // Delete old splits and insert new ones
+            await supabase.from('expense_splits').delete().eq('expense_id', expenseId)
+
+            const combinedUserIds = [...new Set([...paid_by.map(p => p.user_id), ...splits.map(s => s.user_id)])]
+            const splitRows = combinedUserIds.map(uid => ({
+                expense_id: expenseId,
+                user_id: uid,
+                amount_paid: paid_by.find(p => p.user_id === uid)?.amount_paid || 0,
+                amount_owed: splits.find(s => s.user_id === uid)?.amount_owed || 0,
+            })).filter(r => r.amount_paid > 0 || r.amount_owed > 0)
+
+            const { error: splitErr } = await supabase.from('expense_splits').insert(splitRows)
+            if (splitErr) throw new Error('Failed to update expense splits')
+        }
+
+        // Optimistic update — include expense_splits for data consistency
+        const updatedSplitRows = [...new Set([...paid_by.map(p => p.user_id), ...splits.map(s => s.user_id)])]
+            .map(uid => ({
+                expense_id: expenseId,
+                user_id: uid,
+                amount_paid: paid_by.find(p => p.user_id === uid)?.amount_paid || 0,
+                amount_owed: splits.find(s => s.user_id === uid)?.amount_owed || 0,
+            }))
+            .filter(r => r.amount_paid > 0 || r.amount_owed > 0)
+
+        setExpenses(prev => prev.map(e => e.id === expenseId
+            ? { ...e, ...updateFields, paid_by, splits, expense_splits: updatedSplitRows }
+            : e
+        ))
+    }
+
+    /* ── Sponsorships ── */
+    const loadSponsorships = async (groupId) => {
+        if (!SUPABASE_CONFIGURED) return []
+        try {
+            const { data, error } = await supabase
+                .from('sponsorships')
+                .select('*')
+                .eq('group_id', groupId)
+                .order('created_at', { ascending: false })
+            if (error) { console.error('Load sponsorships error:', error); return [] }
+            setSponsorships(prev => {
+                const otherGroups = prev.filter(s => s.group_id !== groupId)
+                return [...otherGroups, ...(data || [])]
+            })
+            return data || []
+        } catch (e) {
+            console.error('loadSponsorships error:', e)
+            return []
+        }
+    }
+
+    const addSponsorship = async ({ groupId, sponsorId, recipientId, amount, percentage, note }) => {
+        if (!SUPABASE_CONFIGURED) return
+        const row = {
+            group_id: groupId,
+            sponsor_id: sponsorId,
+            recipient_id: recipientId,
+            amount: Math.round(amount * 100) / 100,
+            percentage: percentage || null,
+            note: note || '',
+        }
+        const { data, error } = await supabase.from('sponsorships').insert([row]).select().single()
+        if (error) throw new Error(error.message || 'Failed to create sponsorship')
+        setSponsorships(prev => [data, ...prev])
+        return data
+    }
+
+    const deleteSponsorship = async (sponsorshipId) => {
+        if (!SUPABASE_CONFIGURED) return
+        const { error } = await supabase.from('sponsorships').delete().eq('id', sponsorshipId)
+        if (error) throw new Error(error.message || 'Failed to delete sponsorship')
+        setSponsorships(prev => prev.filter(s => s.id !== sponsorshipId))
     }
 
     /* ── EXPERIMENTAL: createPendingSettlement ── */
@@ -462,6 +576,13 @@ export function AppProvider({ children }) {
         if (!SUPABASE_CONFIGURED) return
         const { error } = await supabase.from('settlements_tracker').delete().eq('id', settlementId)
         if (error) throw error
+        setPendingSettlements(prev => prev.filter(s => s.id !== settlementId))
+    }
+
+    const deleteSettlement = async (settlementId) => {
+        if (!SUPABASE_CONFIGURED) return
+        const { error } = await supabase.from('settlements_tracker').delete().eq('id', settlementId)
+        if (error) throw new Error(error.message || 'Failed to delete settlement')
         setPendingSettlements(prev => prev.filter(s => s.id !== settlementId))
     }
 
@@ -500,129 +621,7 @@ export function AppProvider({ children }) {
        FRIEND SYSTEM
     ══════════════════════════════════════════ */
 
-    /** Load friendships + friend requests for current user */
-    const loadFriendData = useCallback(async (userId) => {
-        if (!SUPABASE_CONFIGURED) return
-        try {
-            const [friendshipsRes, requestsRes] = await Promise.all([
-                supabase.from('friendships').select('*').or(`user_a_id.eq.${userId},user_b_id.eq.${userId}`),
-                supabase.from('friend_requests').select('*').or(`sender_id.eq.${userId},receiver_id.eq.${userId}`).eq('status', 'pending'),
-            ])
-            if (friendshipsRes.data) setFriendships(friendshipsRes.data)
-            if (requestsRes.data) setFriendRequests(requestsRes.data)
 
-            // Fetch friend user profiles
-            const friendUserIds = new Set()
-            friendshipsRes.data?.forEach(f => {
-                if (f.user_a_id !== userId) friendUserIds.add(f.user_a_id)
-                if (f.user_b_id !== userId) friendUserIds.add(f.user_b_id)
-            })
-            requestsRes.data?.forEach(r => {
-                if (r.sender_id !== userId) friendUserIds.add(r.sender_id)
-                if (r.receiver_id !== userId) friendUserIds.add(r.receiver_id)
-            })
-            if (friendUserIds.size > 0) {
-                const { data: friendProfiles } = await supabase.from('users').select('*').in('id', Array.from(friendUserIds))
-                if (friendProfiles) {
-                    setFriends(prev => {
-                        const existing = new Map(prev.map(f => [f.id, f]))
-                        friendProfiles.forEach(fp => existing.set(fp.id, fp))
-                        return Array.from(existing.values())
-                    })
-                }
-            }
-        } catch (e) { console.warn('loadFriendData error:', e) }
-    }, [])
-
-    /** Send a friend request by email */
-    const sendFriendRequest = async (email) => {
-        if (!SUPABASE_CONFIGURED || !currentUser) throw new Error('Not configured')
-        const trimmed = email.trim().toLowerCase()
-        if (trimmed === currentUser.email?.toLowerCase()) throw new Error('Cannot add yourself')
-
-        // Find user by email
-        const { data: targetUser } = await supabase.from('users').select('id, full_name, email').eq('email', trimmed).single()
-        if (!targetUser) throw new Error('No user found with that email. They need to sign up first.')
-
-        // Check if already friends
-        const [idA, idB] = [currentUser.id, targetUser.id].sort()
-        const { data: existing } = await supabase.from('friendships').select('id').eq('user_a_id', idA).eq('user_b_id', idB).single()
-        if (existing) throw new Error(`Already friends with ${targetUser.full_name}`)
-
-        // Check existing pending request
-        const { data: existingReq } = await supabase.from('friend_requests').select('id').eq('sender_id', currentUser.id).eq('receiver_id', targetUser.id).single()
-        if (existingReq) throw new Error('Friend request already sent')
-
-        // Send request
-        const { data, error } = await supabase.from('friend_requests').insert({ sender_id: currentUser.id, receiver_id: targetUser.id }).select().single()
-        if (error) throw error
-        setFriendRequests(prev => [data, ...prev])
-
-        // Create notification for the target user
-        await supabase.from('notifications').insert({
-            user_id: targetUser.id,
-            type: 'friend_request',
-            title: 'New Friend Request',
-            body: `${currentUser.full_name} wants to be your friend`,
-            reference_id: data.id,
-        })
-
-        return targetUser
-    }
-
-    /** Accept a friend request */
-    const acceptFriendRequest = async (requestId) => {
-        if (!SUPABASE_CONFIGURED || !currentUser) return
-        const request = friendRequests.find(r => r.id === requestId)
-        if (!request) throw new Error('Request not found')
-
-        // Update request status
-        await supabase.from('friend_requests').update({ status: 'accepted' }).eq('id', requestId)
-
-        // Create friendship (sorted IDs for uniqueness)
-        const [idA, idB] = [request.sender_id, request.receiver_id].sort()
-        await supabase.from('friendships').upsert({ user_a_id: idA, user_b_id: idB }, { onConflict: 'user_a_id,user_b_id', ignoreDuplicates: true })
-
-        // Notify sender
-        await supabase.from('notifications').insert({
-            user_id: request.sender_id,
-            type: 'friend_accepted',
-            title: 'Friend Request Accepted',
-            body: `${currentUser.full_name} accepted your friend request! 🎉`,
-            reference_id: requestId,
-        })
-
-        setFriendRequests(prev => prev.filter(r => r.id !== requestId))
-        await loadFriendData(currentUser.id)
-    }
-
-    /** Reject a friend request */
-    const rejectFriendRequest = async (requestId) => {
-        if (!SUPABASE_CONFIGURED) return
-        await supabase.from('friend_requests').delete().eq('id', requestId)
-        setFriendRequests(prev => prev.filter(r => r.id !== requestId))
-    }
-
-    /** Remove a friendship */
-    const removeFriend = async (friendshipId) => {
-        if (!SUPABASE_CONFIGURED) return
-        await supabase.from('friendships').delete().eq('id', friendshipId)
-        setFriendships(prev => prev.filter(f => f.id !== friendshipId))
-    }
-
-    /** Get friend ID from a friendship record */
-    const getFriendIdFromFriendship = (friendship) => {
-        if (!currentUser) return null
-        return friendship.user_a_id === currentUser.id ? friendship.user_b_id : friendship.user_a_id
-    }
-
-    /** Check if user is my friend */
-    const isFriend = (userId) => {
-        return friendships.some(f =>
-            (f.user_a_id === currentUser?.id && f.user_b_id === userId) ||
-            (f.user_a_id === userId && f.user_b_id === currentUser?.id)
-        )
-    }
 
     /* ══════════════════════════════════════════
        NOTIFICATIONS
@@ -648,6 +647,27 @@ export function AppProvider({ children }) {
         } catch (e) { console.warn('loadNotifications error:', e) }
     }, [])
 
+    // assign the ref so initAuth's doLoadAllData can call all loaders.
+    loadAllDataRef.current = async (userId) => {
+        try {
+            await Promise.all([
+                loadUserData(userId),
+                loadNotifications(userId),
+            ])
+        } catch (e) {
+            console.warn('loadAllData error:', e)
+        }
+    }
+
+    /* ── Manual Refresh (for Pull-to-Refresh) ── */
+    const manualRefresh = useCallback(async () => {
+        if (!SUPABASE_CONFIGURED || !currentUser?.id) return
+        await Promise.all([
+            loadUserData(currentUser.id),
+            loadNotifications(currentUser.id),
+        ])
+    }, [currentUser?.id, loadUserData, loadNotifications])
+
     const markNotificationRead = async (notifId) => {
         if (!SUPABASE_CONFIGURED) return
         await supabase.from('notifications').update({ is_read: true }).eq('id', notifId)
@@ -667,18 +687,12 @@ export function AppProvider({ children }) {
         if (!SUPABASE_CONFIGURED || !currentUser) return
 
         let debounceTimer
-        let friendDebounceTimer
         let notifDebounceTimer
         let pollInterval
 
         const triggerReload = () => {
             clearTimeout(debounceTimer)
             debounceTimer = setTimeout(() => loadUserData(currentUser.id), 300)
-        }
-
-        const triggerFriendReload = () => {
-            clearTimeout(friendDebounceTimer)
-            friendDebounceTimer = setTimeout(() => loadFriendData(currentUser.id), 300)
         }
 
         const triggerNotifReload = () => {
@@ -692,8 +706,6 @@ export function AppProvider({ children }) {
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_splits' }, triggerReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'settlements_tracker' }, triggerReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests' }, triggerFriendReload)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, triggerFriendReload)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, triggerNotifReload)
             .subscribe((status, err) => {
                 if (status === 'SUBSCRIBED') {
@@ -705,7 +717,6 @@ export function AppProvider({ children }) {
                     if (!pollInterval) {
                         pollInterval = setInterval(() => {
                             loadUserData(currentUser.id)
-                            loadFriendData(currentUser.id)
                             loadNotifications(currentUser.id)
                         }, 30000)
                     }
@@ -717,18 +728,16 @@ export function AppProvider({ children }) {
 
         pollInterval = setInterval(() => {
             loadUserData(currentUser.id)
-            loadFriendData(currentUser.id)
             loadNotifications(currentUser.id)
         }, 30000)
 
         return () => {
             supabase.removeChannel(channel)
             clearTimeout(debounceTimer)
-            clearTimeout(friendDebounceTimer)
             clearTimeout(notifDebounceTimer)
             clearInterval(pollInterval)
         }
-    }, [currentUser, loadUserData, loadFriendData, loadNotifications])
+    }, [currentUser, loadUserData, loadNotifications])
 
     /* ══════════════════════════════════════════
        CHAT SYSTEM (JSON blob storage)
@@ -770,20 +779,21 @@ export function AppProvider({ children }) {
     const value = {
         currentUser, setCurrentUser,
         login, logout, completeProfile, needsProfile,
-        isLoading, isSupabaseConfigured: SUPABASE_CONFIGURED,
+        isLoading, dataLoading, isSupabaseConfigured: SUPABASE_CONFIGURED,
         friends, setFriends,
-        groups, addGroup, joinGroup, removeMember, deleteGroup,
-        expenses, addExpense, deleteExpense,
+        groups, addGroup, joinGroup, removeMember, deleteGroup, transferAdmin,
+        expenses, addExpense, deleteExpense, updateExpense,
         settlements, markSettled,
-        pendingSettlements, createPendingSettlement, cancelPendingSettlement, approveSettlement, rejectSettlement,
+        pendingSettlements, createPendingSettlement, cancelPendingSettlement, approveSettlement, rejectSettlement, deleteSettlement,
         getUserById, getGroupById, getExpensesByGroup,
-        // Friend system
-        friendships, friendRequests, sendFriendRequest, acceptFriendRequest, rejectFriendRequest, removeFriend,
-        getFriendIdFromFriendship, isFriend, loadFriendData,
         // Notifications
         notifications, unreadNotifCount, loadNotifications, markNotificationRead, markAllNotificationsRead,
         // Chat
         loadChatMessages, sendChatMessage,
+        // Sponsorships
+        sponsorships, loadSponsorships, addSponsorship, deleteSponsorship,
+        // Pull-to-Refresh
+        manualRefresh,
     }
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>

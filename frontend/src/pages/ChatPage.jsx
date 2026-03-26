@@ -5,20 +5,19 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Send, Smile, TrendingUp } from 'lucide-react'
 import { getAvatarColor, getInitials, formatAmount, calculateNetBalances, simplifyDebts } from '../utils/helpers'
 import { supabase } from '../services/supabase'
+import PullToRefresh from '../components/PullToRefresh'
 
 // Common emoji picker (simple inline)
 const QUICK_EMOJIS = ['😀', '😂', '❤️', '👍', '🙏', '🎉', '🔥', '💰', '🍕', '☕', '🏖️', '✈️', '🏠', '🚗', '🎬', '🍔']
 
 export default function ChatPage() {
     const { groupId } = useParams()
-    const [searchParams] = useSearchParams()
-    const friendshipId = searchParams.get('friendship')
     const navigate = useNavigate()
 
     const {
         currentUser, getUserById, getGroupById,
         loadChatMessages, sendChatMessage,
-        expenses, pendingSettlements, friendships, getFriendIdFromFriendship,
+        expenses, pendingSettlements, manualRefresh
     } = useApp()
 
     const [messages, setMessages] = useState([])
@@ -28,18 +27,13 @@ export default function ChatPage() {
     const messagesEndRef = useRef(null)
     const inputRef = useRef(null)
 
-    // Determine chat type + reference
-    const chatType = groupId ? 'group' : 'direct'
-    const referenceId = groupId || friendshipId
-    const group = groupId ? getGroupById(groupId) : null
-
-    // For direct chats, find the friend
-    const friendship = friendshipId ? friendships.find(f => f.id === friendshipId) : null
-    const friendId = friendship ? getFriendIdFromFriendship(friendship) : null
-    const friendUser = friendId ? getUserById(friendId) : null
+    // Chat info
+    const chatType = 'group'
+    const referenceId = groupId
+    const group = getGroupById(groupId)
 
     // Chat title
-    const chatTitle = group ? group.name : friendUser?.full_name?.split(' ')[0] || 'Chat'
+    const chatTitle = group ? group.name : 'Group Chat'
     const chatEmoji = group ? group.emoji : '💬'
 
     // Calculate balance for the expense banner
@@ -59,28 +53,7 @@ export default function ChatPage() {
             bannerAmount < -0.01 ? `You owe ${formatAmount(-bannerAmount)}` :
                 'All settled up ✅'
         expenseLink = `/groups/${groupId}`
-    } else if (friendship && friendUser) {
-        // Find individual expenses involving both users
-        const friendExpenses = expenses.filter(e => 
-            !e.group_id && 
-            e.expense_splits?.some(s => s.user_id === currentUser?.id) &&
-            e.expense_splits?.some(s => s.user_id === friendUser?.id)
-        )
-        // Find individual settlements between the two users
-        const friendSettlements = completedSettlements.filter(s => 
-            !s.group_id && 
-            ((s.payer_id === currentUser?.id && s.receiver_id === friendUser?.id) || 
-             (s.payer_id === friendUser?.id && s.receiver_id === currentUser?.id))
-        )
-        const balances = calculateNetBalances(friendExpenses, friendSettlements)
-        bannerAmount = balances[currentUser?.id] || 0
-        bannerPositive = bannerAmount >= 0
-        bannerText = bannerAmount > 0.01 ? `You're owed ${formatAmount(bannerAmount)}` :
-            bannerAmount < -0.01 ? `You owe ${formatAmount(-bannerAmount)}` :
-                'All settled up ✅'
-        expenseLink = `/friends/${friendUser.id}` // friend detail page
     }
-
     // Load messages on mount + realtime subscription
     const loadMessages = useCallback(async () => {
         if (!referenceId) return
@@ -177,7 +150,8 @@ export default function ChatPage() {
     }
 
     return (
-        <div className="flex flex-col h-dvh bg-[#0B0B1A]">
+        <PullToRefresh onRefresh={manualRefresh}>
+            <div className="flex flex-col h-dvh bg-[#0B0B1A]">
             {/* ─── Header ─── */}
             <div className="px-4 pt-10 pb-3 shrink-0" style={{ background: 'rgba(13,13,26,0.95)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                 <div className="flex items-center gap-3">
@@ -200,7 +174,7 @@ export default function ChatPage() {
                 </div>
 
                 {/* ─── Expense banner ─── */}
-                {(group || friendship) && (
+                {group && (
                     <motion.button
                         className="w-full mt-2 py-2 px-3 rounded-xl flex items-center gap-2 text-left"
                         style={{
@@ -354,6 +328,7 @@ export default function ChatPage() {
                     </motion.button>
                 </div>
             </div>
-        </div>
+            </div>
+        </PullToRefresh>
     )
 }

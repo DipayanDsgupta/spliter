@@ -1,16 +1,19 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { useApp } from '../context/AppContext'
 import { calculateNetBalances, simplifyDebts, formatAmount, formatDate, generateSettlementId } from '../utils/helpers'
-import { CheckCircle, TrendingDown, Loader2, X, Check, Clock, Copy, ChevronDown, ChevronUp } from 'lucide-react'
+import { CheckCircle, TrendingDown, Loader2, X, Check, Clock, Copy, ChevronDown, ChevronUp, ChevronRight } from 'lucide-react'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import PullToRefresh from '../components/PullToRefresh'
 
 export default function BalancesPage() {
     const {
         expenses, groups, getUserById, currentUser,
-        pendingSettlements, createPendingSettlement, cancelPendingSettlement,
-        approveSettlement, rejectSettlement
+        pendingSettlements, sponsorships, createPendingSettlement, cancelPendingSettlement,
+        approveSettlement, rejectSettlement, manualRefresh
     } = useApp()
+    const navigate = useNavigate()
 
     // UI states
     const [payingKey, setPayingKey] = useState(null)   // which transaction shows "I've Paid" input
@@ -23,7 +26,7 @@ export default function BalancesPage() {
     const completedSettlements = pendingSettlements.filter(s => s.status === 'completed')
 
     // Global adjusted balances
-    const allBalances = calculateNetBalances(expenses, completedSettlements)
+    const allBalances = calculateNetBalances(expenses, completedSettlements, sponsorships)
     const allTransactions = simplifyDebts(allBalances)
     const myTransactions = allTransactions.filter(
         t => t.from === currentUser?.id || t.to === currentUser?.id
@@ -120,7 +123,8 @@ export default function BalancesPage() {
             {groups.map(group => {
                 const groupExpenses = expenses.filter(e => e.group_id === group.id)
                 const groupCompletedSettlements = completedSettlements.filter(s => s.group_id === group.id)
-                const balances = calculateNetBalances(groupExpenses, groupCompletedSettlements)
+                const groupSponsorships = (sponsorships || []).filter(s => s.group_id === group.id)
+                const balances = calculateNetBalances(groupExpenses, groupCompletedSettlements, groupSponsorships)
                 const myGroupNet = balances[currentUser?.id] || 0
                 const transactions = simplifyDebts(balances).filter(
                     t => t.from === currentUser?.id || t.to === currentUser?.id
@@ -467,8 +471,9 @@ export default function BalancesPage() {
     )
 
     return (
-        <div className="page animated-bg">
-            <div className="px-5 pt-12 pb-6">
+        <PullToRefresh onRefresh={manualRefresh}>
+            <div className="page animated-bg">
+                <div className="px-5 pt-12 pb-24">
                 <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
                     <h1 className="text-2xl font-extrabold text-white">Settle Up</h1>
                     <p className="text-[#94A3B8] text-sm mt-1">All your dues across every group</p>
@@ -515,7 +520,29 @@ export default function BalancesPage() {
                         <GroupBalances />
                     </>
                 )}
+
+                {/* ═══ Settlement History Link ═══ */}
+                <motion.button
+                    onClick={() => navigate('/settlement-history')}
+                    className="w-full mt-8 p-4 rounded-2xl flex items-center justify-between transition-colors"
+                    style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    whileTap={{ scale: 0.98 }}
+                >
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(124,58,237,0.12)' }}>
+                            <CheckCircle size={20} className="text-[#A78BFA]" />
+                        </div>
+                        <div className="text-left">
+                            <p className="text-sm font-bold text-white">Settlement History</p>
+                            <p className="text-[11px] text-[#94A3B8] mt-0.5">View and manage your past settlements</p>
+                        </div>
+                    </div>
+                    <ChevronRight size={18} className="text-[#64748B]" />
+                </motion.button>
             </div>
-        </div>
+            </div>
+        </PullToRefresh>
     )
 }

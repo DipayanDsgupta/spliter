@@ -1,17 +1,24 @@
 import { motion } from 'framer-motion'
 import { useApp } from '../context/AppContext'
+import PullToRefresh from '../components/PullToRefresh'
 import { formatDate, formatTime, CATEGORIES, formatAmount, getAvatarColor, getInitials } from '../utils/helpers'
 
 export default function ActivityPage() {
-    const { expenses, getUserById, currentUser } = useApp()
+    const { expenses, pendingSettlements, getUserById, currentUser, manualRefresh } = useApp()
     
     // Only show expenses that the current user is a part of (paid for or split)
     const userExpenses = expenses.filter(e => 
         e.paid_by?.some(p => p.user_id === currentUser?.id) || 
         e.expense_splits?.some(s => s.user_id === currentUser?.id)
-    )
+    ).map(e => ({ ...e, type: 'expense' }))
 
-    const sorted = [...userExpenses].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    // Get completed settlements the user was part of
+    const completedSettlements = (pendingSettlements || []).filter(s => 
+        s.status === 'completed' && (s.payer_id === currentUser?.id || s.receiver_id === currentUser?.id)
+    ).map(s => ({ ...s, type: 'settlement' }))
+
+    const combinedActivity = [...userExpenses, ...completedSettlements]
+    const sorted = combinedActivity.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
 
     // Group by date
     const groups = {}
@@ -22,8 +29,9 @@ export default function ActivityPage() {
     }
 
     return (
-        <div className="page animated-bg">
-            <div className="px-5 pt-12 pb-6">
+        <PullToRefresh onRefresh={manualRefresh}>
+            <div className="page animated-bg">
+                <div className="px-5 pt-12 pb-24">
                 <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
                     <h1 className="text-2xl font-extrabold text-white">Activity</h1>
                     <p className="text-[#94A3B8] text-sm mt-1">All your expense history</p>
@@ -37,7 +45,46 @@ export default function ActivityPage() {
                             <div className="h-[1px] flex-1 bg-white/06" />
                         </div>
                         <div className="space-y-3">
-                            {dayExpenses.map((exp, i) => {
+                            {dayExpenses.map((activity, i) => {
+                                if (activity.type === 'settlement') {
+                                    const payer = getUserById(activity.payer_id)
+                                    const receiver = getUserById(activity.receiver_id)
+                                    const isMePayer = activity.payer_id === currentUser?.id
+                                    const verb = isMePayer ? 'You paid' : `${payer?.full_name?.split(' ')[0]} paid`
+                                    const target = activity.receiver_id === currentUser?.id ? 'you' : receiver?.full_name?.split(' ')[0]
+
+                                    return (
+                                        <motion.div
+                                            key={`settlement-${activity.id}`}
+                                            className="card bg-green-900/10 border border-green-500/20"
+                                            initial={{ opacity: 0, x: -10 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            transition={{ delay: i * 0.04 }}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl shrink-0 bg-green-500/20 text-green-400">
+                                                    💸
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <p className="font-bold text-white text-sm leading-tight">
+                                                            {verb} {target}
+                                                        </p>
+                                                        <div className="text-right shrink-0">
+                                                            <p className="font-extrabold text-green-400 text-base">{isMePayer ? '-' : '+'}{formatAmount(activity.amount)}</p>
+                                                            <p className="text-[10px] text-[#94A3B8] font-medium mt-0.5">{formatTime(activity.created_at)}</p>
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-xs text-[#94A3B8] mt-1 italic">
+                                                        "Debt simplified via {activity.group_id ? 'group' : 'Spliter'}"
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </motion.div>
+                                    )
+                                }
+
+                                const exp = activity
                                 const cat = CATEGORIES.find(c => c.id === exp.category) || CATEGORIES[7]
                                 const payers = exp.paid_by.map(p => {
                                     const u = getUserById(p.user_id)
@@ -46,7 +93,7 @@ export default function ActivityPage() {
 
                                 return (
                                     <motion.div
-                                        key={exp.id}
+                                        key={`exp-${exp.id}`}
                                         className="card"
                                         initial={{ opacity: 0, x: -10 }}
                                         animate={{ opacity: 1, x: 0 }}
@@ -94,7 +141,7 @@ export default function ActivityPage() {
                                                 const [c1, c2] = getAvatarColor(getUserById(s.user_id)?.full_name || '')
                                                 return (
                                                     <div
-                                                        key={s.user_id}
+                                                        key={`split-${s.user_id}`}
                                                         className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white border"
                                                         style={{
                                                             background: `linear-gradient(135deg, ${c1}, ${c2})`,
@@ -114,6 +161,7 @@ export default function ActivityPage() {
                     </div>
                 ))}
             </div>
-        </div>
+            </div>
+        </PullToRefresh>
     )
 }

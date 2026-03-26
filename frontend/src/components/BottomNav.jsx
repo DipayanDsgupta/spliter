@@ -1,12 +1,11 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Home, Users, UserCheck, TrendingUp, User, Activity } from 'lucide-react'
+import { Home, Users, TrendingUp, User, Activity } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 
 const NAV_ITEMS = [
     { icon: Home, label: 'Home', path: '/' },
     { icon: Users, label: 'Groups', path: '/groups' },
-    { icon: UserCheck, label: 'Friends', path: '/friends' },
     { icon: Activity, label: 'Activity', path: '/activity' },
     { icon: TrendingUp, label: 'Settle', path: '/balances' },
     { icon: User, label: 'Profile', path: '/profile' },
@@ -26,8 +25,7 @@ export default function BottomNav() {
             <div className="flex items-center justify-around px-2 py-2">
                 {NAV_ITEMS.map(({ icon: Icon, label, path }) => {
                     const isActive = location.pathname === path ||
-                        (path === '/groups' && location.pathname.startsWith('/groups')) ||
-                        (path === '/friends' && location.pathname.startsWith('/friends'))
+                        (path === '/groups' && location.pathname.startsWith('/groups'))
                     const isProfile = path === '/profile'
                     return (
                         <button

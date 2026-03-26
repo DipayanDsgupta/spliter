@@ -1,15 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Users, ChevronRight, X, Check } from 'lucide-react'
+import { Plus, Search, Users, ChevronRight, X, Check, Camera } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import PullToRefresh from '../components/PullToRefresh'
 import { calculateNetBalances, formatAmount, getAvatarColor, getInitials } from '../utils/helpers'
 import { addPendingMembers } from '../services/supabase'
 import toast from 'react-hot-toast'
+import { QRCodeSVG } from 'qrcode.react'
 
 const EMOJIS = ['🏖️', '🏠', '🎉', '✈️', '🍕', '💼', '🎮', '🏕️', '🚗', '🎯', '🎓', '💊', '🐾', '🛠️', '🎵']
-const isEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
-const isPhone = v => /^[6-9]\d{9}$/.test(v.replace(/\D/g, ''))
 
 /* ══════════════════════════════════════════
    CREATE GROUP MODAL
@@ -22,9 +22,6 @@ function CreateGroupModal({ onClose }) {
     const [name, setName] = useState('')
     const [emoji, setEmoji] = useState('🎯')
     const [selected, setSelected] = useState([])
-    const [inviteInput, setInvite] = useState('')
-    const [inviteList, setInviteList] = useState([])
-    const [inputError, setInputError] = useState('')
     const [loading, setLoading] = useState(false)
     const [createdGroup, setCreatedGroup] = useState(null)
 
@@ -32,38 +29,16 @@ function CreateGroupModal({ onClose }) {
         p.includes(id) ? p.filter(x => x !== id) : [...p, id]
     )
 
-    const addInvite = () => {
-        const raw = inviteInput.trim(); if (!raw) return; setInputError('')
-        let value = raw, type = ''
-        if (isEmail(raw)) { type = 'email'; value = raw.toLowerCase() }
-        else if (isPhone(raw)) { type = 'phone'; value = raw.replace(/\D/g, '') }
-        else { setInputError('Enter a valid email or 10-digit mobile number'); return }
-        if (inviteList.find(i => i.value === value)) { setInputError('Already added'); return }
-        setInviteList(p => [...p, {
-            value, type,
-            label: type === 'email' ? raw : `+91 ${value.slice(0, 5)} ${value.slice(5)}`,
-        }])
-        setInvite('')
-    }
-    const removeInvite = v => setInviteList(p => p.filter(i => i.value !== v))
-
     const create = async () => {
         if (!name.trim()) return
         setLoading(true)
-
-        // Safety: if anything hangs > 10s, force-complete so UI never gets stuck
         const safety = setTimeout(() => {
             setLoading(false)
-            toast.error('DB save timed out — run SQL tables in Supabase to persist data.')
+            toast.error('DB save timed out.')
         }, 10000)
-
         try {
             const members = [currentUser.id, ...selected]
             const group = await addGroup({ name: name.trim(), emoji, members })
-            if (isSupabaseConfigured && inviteList.length > 0) {
-                try { await addPendingMembers(group.id, inviteList, currentUser.id) }
-                catch (e) { console.warn('pending invite error', e) }
-            }
             clearTimeout(safety)
             setLoading(false)
             setCreatedGroup(group)
@@ -71,20 +46,15 @@ function CreateGroupModal({ onClose }) {
         } catch (e) {
             clearTimeout(safety)
             setLoading(false)
-            console.error(e)
-            toast.error(`ERROR: ${e?.message || JSON.stringify(e) || 'Unknown'}`)
+            toast.error(`ERROR: ${e?.message || 'Unknown'}`)
         }
     }
 
     const goToGroup = () => { onClose(); navigate(`/groups/${createdGroup.id}`) }
 
     const shareWhatsApp = () => {
-        const msg = encodeURIComponent(`Hey! I added you to *${createdGroup.name}* on Spliter — split expenses easily! 💰\n\nJoin my group using this ID: ${createdGroup.id}`)
+        const msg = encodeURIComponent(`Hey! Join my group *${createdGroup.name}* on Spliter — split expenses easily! 💰\n\nGroup ID: ${createdGroup.id}\n\nDownload the app and use this ID to join!`)
         window.open(`https://wa.me/?text=${msg}`, '_blank')
-    }
-    const shareSMS = () => {
-        const msg = encodeURIComponent(`Join "${createdGroup.name}" on Spliter 👉 ID: ${createdGroup.id}`)
-        window.open(`sms:?body=${msg}`, '_blank')
     }
     const copyId = async () => {
         await navigator.clipboard.writeText(createdGroup.id)
@@ -92,39 +62,49 @@ function CreateGroupModal({ onClose }) {
     }
     const nativeShare = async () => {
         if (navigator.share) {
-            await navigator.share({ title: `Join ${createdGroup.name}`, text: `Split expenses on Spliter! Use Group ID: ${createdGroup.id}` })
+            await navigator.share({ title: `Join ${createdGroup.name} on Spliter`, text: `Split expenses easily on Spliter! 💰\n\nGroup ID: ${createdGroup.id}\n\nDownload the app and use this ID to join!` })
         } else { await copyId() }
     }
 
     return (
-        <motion.div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+        <motion.div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={step === 'share' ? goToGroup : onClose} />
 
-            <motion.div className="relative w-full max-w-lg z-10 rounded-t-3xl sm:rounded-3xl flex flex-col"
+            <motion.div className="relative w-full max-w-sm z-10 rounded-3xl flex flex-col"
                 style={{ background: '#141428', border: '1px solid rgba(255,255,255,0.10)', maxHeight: '85dvh' }}
-                initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+                initial={{ y: 50, scale: 0.95, opacity: 0 }} animate={{ y: 0, scale: 1, opacity: 1 }}
+                exit={{ y: 20, scale: 0.95, opacity: 0 }}
                 transition={{ type: 'spring', damping: 28, stiffness: 320 }}>
-
-                {/* Top gradient */}
-                <div className="h-[2px] w-full shrink-0 rounded-t-3xl"
-                    style={{ background: 'linear-gradient(90deg, #7C3AED, #3B82F6, #06B6D4)' }} />
-                <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mt-3 shrink-0" />
 
                 <AnimatePresence mode="wait">
 
                     {/* ── SHARE SHEET ── */}
                     {step === 'share' && createdGroup && (
-                        <motion.div key="share" className="px-6 pt-4 pb-6"
+                        <motion.div key="share" className="px-6 pt-6 pb-6"
                             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                            <div className="text-center mb-6">
+                            <div className="text-center mb-5">
                                 <div className="text-5xl mb-3">{createdGroup.emoji}</div>
                                 <h2 className="text-xl font-bold text-white mb-1">"{createdGroup.name}" created! 🎉</h2>
                                 <p className="text-sm" style={{ color: '#94A3B8' }}>Invite friends to join</p>
                             </div>
 
+                            {/* QR Code */}
+                            <div className="flex justify-center mb-5">
+                                <div className="bg-white p-3 rounded-2xl">
+                                    <QRCodeSVG
+                                        value={`spliter://join/${createdGroup.id}`}
+                                        size={160}
+                                        bgColor="#ffffff"
+                                        fgColor="#0D0D1A"
+                                        level="M"
+                                    />
+                                </div>
+                            </div>
+                            <p className="text-center text-[10px] text-[#64748B] mb-4">Scan this QR to join the group</p>
+
                             {/* Invite link preview */}
-                            <div className="flex items-center gap-2 p-3 rounded-2xl mb-5"
+                            <div className="flex items-center gap-2 p-3 rounded-2xl mb-4"
                                 style={{ background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)' }}>
                                 <p className="text-xs flex-1 truncate font-mono" style={{ color: '#9D5FF3' }}>
                                     {createdGroup.id}
@@ -138,33 +118,16 @@ function CreateGroupModal({ onClose }) {
                             {/* Share buttons */}
                             <div className="grid grid-cols-2 gap-3 mb-5">
                                 <motion.button onClick={shareWhatsApp} whileTap={{ scale: 0.96 }}
-                                    className="flex items-center justify-center gap-2 py-4 rounded-2xl font-bold text-sm"
+                                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm"
                                     style={{ background: 'rgba(37,211,102,0.12)', border: '1px solid rgba(37,211,102,0.25)', color: '#25D366' }}>
-                                    <span className="text-lg">📱</span> WhatsApp
+                                    📱 WhatsApp
                                 </motion.button>
-
-                                <motion.button onClick={shareSMS} whileTap={{ scale: 0.96 }}
-                                    className="flex items-center justify-center gap-2 py-4 rounded-2xl font-bold text-sm"
-                                    style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', color: '#60A5FA' }}>
-                                    <span className="text-lg">💬</span> SMS
-                                </motion.button>
-
                                 <motion.button onClick={nativeShare} whileTap={{ scale: 0.96 }}
-                                    className="flex items-center justify-center gap-2 py-4 rounded-2xl font-bold text-sm col-span-2"
+                                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm"
                                     style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#F1F5F9' }}>
-                                    <span className="text-lg">🔗</span> Share via any app
+                                    🔗 Share
                                 </motion.button>
                             </div>
-
-                            {inviteList.length > 0 && (
-                                <div className="p-3 rounded-2xl mb-4"
-                                    style={{ background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.2)' }}>
-                                    <p className="text-xs font-semibold" style={{ color: '#10B981' }}>
-                                        ✅ {inviteList.length} email/phone invite{inviteList.length > 1 ? 's' : ''} saved —
-                                        they'll auto-join when they sign up!
-                                    </p>
-                                </div>
-                            )}
 
                             <button className="btn-primary" onClick={goToGroup}>Open Group →</button>
                         </motion.div>
@@ -173,14 +136,10 @@ function CreateGroupModal({ onClose }) {
                     {/* ── FORM ── */}
                     {step === 'form' && (
                         <motion.div key="form" className="flex flex-col flex-1 overflow-hidden" exit={{ opacity: 0 }}>
-                            {/* Scrollable body */}
-                            <div className="overflow-y-auto flex-1 px-6 pt-4 pb-2">
-
+                            <div className="overflow-y-auto flex-1 px-6 pt-6 pb-2">
                                 <div className="flex items-center justify-between mb-5">
-                                    <h2 className="text-xl font-bold text-white">New Group</h2>
-                                    <button onClick={onClose}
-                                        className="w-8 h-8 rounded-full flex items-center justify-center"
-                                        style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                                    <h2 className="text-xl font-extrabold text-white">New Group</h2>
+                                    <button onClick={onClose} className="p-2 bg-white/5 rounded-full hover:bg-white/10">
                                         <X size={16} className="text-[#94A3B8]" />
                                     </button>
                                 </div>
@@ -207,62 +166,6 @@ function CreateGroupModal({ onClose }) {
                                     value={name} onChange={e => setName(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && name.trim() && create()}
                                     className="input-field mb-5" autoFocus />
-
-                                {/* Add by email/phone */}
-                                <div className="mb-5">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <p className="label-xs">Add by Email or Phone</p>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <input type="text" placeholder="email@example.com or 9876543210"
-                                            value={inviteInput}
-                                            onChange={e => { setInvite(e.target.value); setInputError('') }}
-                                            onKeyDown={e => e.key === 'Enter' && addInvite()}
-                                            className="input-field flex-1" style={{ fontSize: '13px' }} />
-                                        <button onClick={addInvite}
-                                            className="px-4 rounded-2xl font-bold text-sm shrink-0"
-                                            style={{ background: 'rgba(124,58,237,0.2)', color: '#9D5FF3', border: '1px solid rgba(124,58,237,0.35)' }}>
-                                            Add
-                                        </button>
-                                    </div>
-                                    {inputError && <p className="text-xs mt-1.5 pl-1" style={{ color: '#F43F5E' }}>{inputError}</p>}
-
-                                    {/* Pending invite list */}
-                                    {inviteList.length > 0 && (
-                                        <div className="mt-3 space-y-2">
-                                            {inviteList.map(inv => (
-                                                <div key={inv.value}
-                                                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
-                                                    style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
-                                                    <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
-                                                        style={{ background: 'rgba(59,130,246,0.15)' }}>
-                                                        {inv.type === 'email' ? '📧' : '📱'}
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className="text-white text-sm font-medium truncate">{inv.label}</p>
-                                                        <p className="text-[#475569] text-xs">
-                                                            {inv.type === 'email' ? 'Will auto-join on sign-up' : 'Will auto-join when they register'}
-                                                        </p>
-                                                    </div>
-                                                    <button onClick={() => removeInvite(inv.value)}
-                                                        className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
-                                                        style={{ background: 'rgba(244,63,94,0.12)' }}>
-                                                        <X size={11} style={{ color: '#F43F5E' }} />
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {inviteList.length === 0 && (
-                                        <div className="mt-3 p-3 rounded-xl"
-                                            style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.07)' }}>
-                                            <p className="text-xs" style={{ color: '#475569' }}>
-                                                💡 <strong style={{ color: '#64748B' }}>How it works:</strong> Friend gets a shareable link. When they sign up with the same email/phone, they auto-join this group.
-                                            </p>
-                                        </div>
-                                    )}
-                                </div>
 
                                 {/* Existing friends */}
                                 {friends.length > 0 && (
@@ -303,11 +206,10 @@ function CreateGroupModal({ onClose }) {
 
                             {/* Sticky Create button */}
                             <div className="px-6 py-4 shrink-0 mt-auto"
-                                style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: '#141428', paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}>
-                                {(selected.length + inviteList.length) > 0 && (
+                                style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: '#141428' }}>
+                                {selected.length > 0 && (
                                     <p className="text-xs text-center mb-2" style={{ color: '#64748B' }}>
                                         Group: you + {selected.length} friend{selected.length !== 1 ? 's' : ''}
-                                        {inviteList.length > 0 && ` + ${inviteList.length} invite${inviteList.length > 1 ? 's' : ''}`}
                                     </p>
                                 )}
                                 <button className="btn-primary flex items-center justify-center gap-2"
@@ -328,19 +230,23 @@ function CreateGroupModal({ onClose }) {
 }
 
 /* ══════════════════════════════════════════
-   JOIN GROUP MODAL
+   JOIN GROUP MODAL (with QR Scanner)
 ══════════════════════════════════════════ */
 function JoinGroupModal({ onClose }) {
     const { joinGroup } = useApp()
     const navigate = useNavigate()
     const [groupId, setGroupId] = useState('')
     const [loading, setLoading] = useState(false)
+    const [scanning, setScanning] = useState(false)
+    const scannerRef = useRef(null)
+    const scannerInstanceRef = useRef(null)
 
-    const handleJoin = async () => {
-        if (!groupId.trim()) return
+    const handleJoin = async (idToJoin) => {
+        const gid = (idToJoin || groupId).trim()
+        if (!gid) return
         setLoading(true)
         try {
-            const group = await joinGroup(groupId.trim())
+            const group = await joinGroup(gid)
             toast.success(`Joined ${group.name}!`)
             onClose()
             navigate(`/groups/${group.id}`)
@@ -350,26 +256,125 @@ function JoinGroupModal({ onClose }) {
         }
     }
 
+    const startScanner = async () => {
+        // Request camera permission first
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+            // Got permission — stop the preview stream, html5-qrcode will start its own
+            stream.getTracks().forEach(t => t.stop())
+        } catch (permErr) {
+            console.warn('Camera permission denied:', permErr)
+            if (permErr.name === 'NotAllowedError') {
+                toast.error('Camera permission denied. Please allow camera access in your device settings.')
+            } else if (permErr.name === 'NotFoundError') {
+                toast.error('No camera found on this device.')
+            } else {
+                toast.error('Could not access camera. Please check permissions.')
+            }
+            return
+        }
+
+        setScanning(true)
+        const { Html5Qrcode } = await import('html5-qrcode')
+        setTimeout(async () => {
+            try {
+                const scanner = new Html5Qrcode('qr-reader')
+                scannerInstanceRef.current = scanner
+                await scanner.start(
+                    { facingMode: 'environment' },
+                    { fps: 10, qrbox: { width: 220, height: 220 } },
+                    (decodedText) => {
+                        let id = decodedText
+                        if (decodedText.startsWith('spliter://join/')) {
+                            id = decodedText.replace('spliter://join/', '')
+                        }
+                        scanner.stop().catch(() => {})
+                        scannerInstanceRef.current = null
+                        setScanning(false)
+                        setGroupId(id)
+                        handleJoin(id)
+                    },
+                    () => {}
+                )
+            } catch (e) {
+                console.warn('Scanner start error:', e)
+                toast.error('Scanner failed to start. Try again.')
+                setScanning(false)
+            }
+        }, 200)
+    }
+
+    const stopScanner = () => {
+        if (scannerInstanceRef.current) {
+            scannerInstanceRef.current.stop().catch(() => {})
+            scannerInstanceRef.current = null
+        }
+        setScanning(false)
+    }
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            if (scannerInstanceRef.current) {
+                scannerInstanceRef.current.stop().catch(() => {})
+            }
+        }
+    }, [])
+
     return (
         <motion.div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-            <motion.div className="relative w-full max-w-sm z-10 glass p-6 rounded-3xl"
-                initial={{ y: 50, scale: 0.95, opacity: 0 }} animate={{ y: 0, scale: 1, opacity: 1 }} exit={{ y: 20, scale: 0.95, opacity: 0 }}>
-                <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-xl font-extrabold text-white">Join by ID</h2>
-                    <button onClick={onClose} className="p-2 bg-white/5 rounded-full hover:bg-white/10"><X size={16} className="text-[#94A3B8]" /></button>
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => { stopScanner(); onClose() }} />
+            <motion.div className="relative w-full max-w-sm z-10 p-6 rounded-3xl"
+                style={{ background: '#141428', border: '1px solid rgba(255,255,255,0.10)' }}
+                initial={{ y: 50, scale: 0.95, opacity: 0 }} animate={{ y: 0, scale: 1, opacity: 1 }}
+                exit={{ y: 20, scale: 0.95, opacity: 0 }}>
+                <div className="flex justify-between items-center mb-5">
+                    <h2 className="text-xl font-extrabold text-white">Join Group</h2>
+                    <button onClick={() => { stopScanner(); onClose() }} className="p-2 bg-white/5 rounded-full hover:bg-white/10">
+                        <X size={16} className="text-[#94A3B8]" />
+                    </button>
                 </div>
-                <div className="mb-6">
-                    <p className="text-xs text-[#94A3B8] mb-3">Paste the Group ID given by your friend.</p>
-                    <input type="text" placeholder="group-123..."
-                        value={groupId} onChange={e => setGroupId(e.target.value)}
-                        className="input-field w-full font-mono text-sm" autoFocus />
-                </div>
-                <button onClick={handleJoin} disabled={!groupId.trim() || loading}
-                    className="btn-primary w-full shadow-md shadow-blue-500/20">
-                    {loading ? 'Joining...' : 'Join Group 🚀'}
-                </button>
+
+                {scanning ? (
+                    <div>
+                        <div id="qr-reader" ref={scannerRef}
+                            className="rounded-2xl overflow-hidden mb-4"
+                            style={{ border: '2px solid rgba(124,58,237,0.3)' }} />
+                        <p className="text-xs text-center text-[#94A3B8] mb-4">Point your camera at a Spliter QR code</p>
+                        <button onClick={stopScanner}
+                            className="w-full py-3 rounded-2xl text-sm font-bold text-[#94A3B8] bg-white/5 border border-white/10">
+                            Cancel Scan
+                        </button>
+                    </div>
+                ) : (
+                    <>
+                        {/* Scan QR button */}
+                        <motion.button onClick={startScanner} whileTap={{ scale: 0.96 }}
+                            className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-bold text-sm mb-4"
+                            style={{ background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)', color: '#9D5FF3' }}>
+                            <Camera size={18} /> Scan QR Code
+                        </motion.button>
+
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="h-[1px] flex-1 bg-white/10" />
+                            <span className="text-xs text-[#64748B] font-medium">or enter ID</span>
+                            <div className="h-[1px] flex-1 bg-white/10" />
+                        </div>
+
+                        <div className="mb-5">
+                            <p className="text-xs text-[#94A3B8] mb-3">Paste the Group ID shared by your friend.</p>
+                            <input type="text" placeholder="Enter group ID..."
+                                value={groupId} onChange={e => setGroupId(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && handleJoin()}
+                                className="input-field w-full font-mono text-sm" autoFocus />
+                        </div>
+                        <button onClick={() => handleJoin()} disabled={!groupId.trim() || loading}
+                            className="btn-primary w-full">
+                            {loading ? 'Joining...' : 'Join Group 🚀'}
+                        </button>
+                    </>
+                )}
             </motion.div>
         </motion.div>
     )
@@ -380,7 +385,7 @@ function JoinGroupModal({ onClose }) {
 ══════════════════════════════════════════ */
 export default function GroupsPage() {
     const navigate = useNavigate()
-    const { groups, expenses, currentUser } = useApp()
+    const { groups, expenses, currentUser, pendingSettlements, sponsorships, manualRefresh } = useApp()
     const [search, setSearch] = useState('')
     const [showCreate, setShowCreate] = useState(false)
     const [showJoin, setShowJoin] = useState(false)
@@ -388,19 +393,20 @@ export default function GroupsPage() {
     const filtered = groups.filter(g => g.name.toLowerCase().includes(search.toLowerCase()))
 
     return (
-        <div className="page animated-bg">
-            <div className="px-5 pt-12 pb-6">
+        <PullToRefresh onRefresh={manualRefresh}>
+            <div className="page animated-bg">
+                <div className="px-5 pt-12 pb-24">
 
-                {/* Header */}
-                <motion.div className="flex items-center justify-between mb-6"
-                    initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-                    <div>
-                        <h1 className="text-2xl font-extrabold text-white">Groups</h1>
-                        <p className="text-[#94A3B8] text-sm mt-1">
-                            {groups.length === 0 ? 'No groups yet' : `${groups.length} active group${groups.length !== 1 ? 's' : ''}`}
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
+                    {/* Header */}
+                    <motion.div className="flex items-center justify-between mb-6"
+                        initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+                        <div>
+                            <h1 className="text-2xl font-extrabold text-white">Groups</h1>
+                            <p className="text-[#94A3B8] text-sm mt-1">
+                                {groups.length === 0 ? 'No groups yet' : `${groups.length} active group${groups.length !== 1 ? 's' : ''}`}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2">
                         <motion.button
                             className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl font-bold text-sm text-[#94A3B8] bg-white/5 hover:bg-white/10 border border-white/5 shadow-md"
                             whileTap={{ scale: 0.96 }}
@@ -455,7 +461,9 @@ export default function GroupsPage() {
                 <div className="space-y-3">
                     {filtered.map((group, i) => {
                         const groupExpenses = expenses.filter(e => e.group_id === group.id)
-                        const balances = calculateNetBalances(groupExpenses)
+                        const groupCompletedSettlements = (pendingSettlements || []).filter(s => s.group_id === group.id && s.status === 'completed')
+                        const groupSponsorships = (sponsorships || []).filter(s => s.group_id === group.id)
+                        const balances = calculateNetBalances(groupExpenses, groupCompletedSettlements, groupSponsorships)
                         const myNet = balances[currentUser?.id] || 0
                         return (
                             <motion.button key={group.id} className="w-full card text-left"
@@ -517,6 +525,7 @@ export default function GroupsPage() {
                 {showCreate && <CreateGroupModal onClose={() => setShowCreate(false)} />}
                 {showJoin && <JoinGroupModal onClose={() => setShowJoin(false)} />}
             </AnimatePresence>
-        </div>
+            </div>
+        </PullToRefresh>
     )
 }
